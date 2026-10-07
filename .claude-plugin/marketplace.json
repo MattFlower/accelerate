@@ -1,0 +1,14 @@
+{
+  "name": "accelerate",
+  "owner": { "name": "Matthew Flower" },
+  "metadata": {
+    "description": "Agent skills for shipping faster without losing track of what's shipping."
+  },
+  "plugins": [
+    {
+      "name": "accelerate",
+      "source": "./",
+      "description": "human-review: turn a branch, PR, or uncommitted work into a self-contained HTML page a person can review in minutes."
+    }
+  ]
+}

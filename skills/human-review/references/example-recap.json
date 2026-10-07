@@ -1,0 +1,546 @@
+{
+  "title": "Read-only share links for project boards",
+  "brief": "Owners can now create a public, read-only link to a board, pick when it expires, and revoke it. Links are stored as SHA-256 hashes, and a project flips to *Shared by link* while any link is live.",
+  "risk": {
+    "level": "medium",
+    "why": "Adds the first unauthenticated route (`GET /s/:token`). The *Never* expiry option can't actually be chosen, and expired links keep a board marked as shared."
+  },
+  "summary": [
+    "New `share_links` table (hashed tokens, expiry, soft revoke) and a `projects.visibility` column.",
+    "Three routes: create and revoke links (owners only), plus a public `GET /s/:token` that returns the board read-only.",
+    "New `canShare` permission: owners only. Editors keep rename but can't share.",
+    "Project header gets a **Share** button and a *Shared by link* pill; the button opens a new share popover.",
+    "Tests for token hashing, expiry, revocation, and the new permission."
+  ],
+  "focus": [
+    {
+      "title": "The public route",
+      "why": "First endpoint with no session. Check it can only ever return a board's id and name.",
+      "ref": "src/server/routes.ts:49"
+    },
+    {
+      "title": "Expiry default swallows \u201cNever\u201d",
+      "why": "`null ?? 7` is `7`, so the popover's *Never* option silently becomes 7 days.",
+      "ref": "src/server/routes.ts:31"
+    },
+    {
+      "title": "Token storage and lookup",
+      "why": "Raw token is returned once; only the hash is stored. Expiry and revocation are checked on every resolve.",
+      "ref": "src/server/shareLinks.ts:29"
+    },
+    {
+      "title": "When a board stops being \u201cshared\u201d",
+      "why": "Visibility is recomputed on revoke but not on expiry.",
+      "ref": "src/server/shareLinks.ts:45"
+    }
+  ],
+  "sections": [
+    {
+      "title": "What users see",
+      "blocks": [
+        {
+          "type": "compare",
+          "id": "header-compare",
+          "before": {
+            "type": "wireframe",
+            "surface": "browser",
+            "url": "teamboard.app/projects/42",
+            "height": 250,
+            "html": "<div style='display:flex;flex-direction:column;gap:16px;padding:18px 22px;height:100%'><div style='display:flex;align-items:center;gap:12px;width:100%'><h1>Q3 Launch Plan</h1><div style='flex:1'></div><button>Rename</button><button aria-label='More'><span data-icon='more'></span></button></div><hr><div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px'><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>To do</h3><div class='wf-box'>Draft launch email</div><div class='wf-box'>Book demo slots</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Doing</h3><div class='wf-box'>Pricing page copy</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Done</h3><div class='wf-box'>Beta feedback summary</div></div></div></div>"
+          },
+          "after": {
+            "type": "wireframe",
+            "surface": "browser",
+            "url": "teamboard.app/projects/42",
+            "height": 250,
+            "html": "<div style='display:flex;flex-direction:column;gap:16px;padding:18px 22px;height:100%'><div style='display:flex;align-items:center;gap:12px;width:100%'><h1>Q3 Launch Plan</h1><span class='wf-pill' data-change='added' data-note='**Shared by link** pill appears while any link is live (`projects.visibility = link`).'>Shared by link</span><div style='flex:1'></div><button>Rename</button><button data-change='added' data-note='**Share** is only rendered for owners \u2014 editors and viewers never see it.'><span data-icon='link'></span>Share</button><button aria-label='More'><span data-icon='more'></span></button></div><hr><div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px'><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>To do</h3><div class='wf-box'>Draft launch email</div><div class='wf-box'>Book demo slots</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Doing</h3><div class='wf-box'>Pricing page copy</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Done</h3><div class='wf-box'>Beta feedback summary</div></div></div></div>"
+          },
+          "caption": "Project header as an owner sees it. Layout inferred from `ProjectHeader.tsx`; board columns are illustrative."
+        },
+        {
+          "type": "compare",
+          "id": "popover-states",
+          "labels": [
+            "Share popover \u2014 no links yet",
+            "After creating a link"
+          ],
+          "before": {
+            "type": "wireframe",
+            "surface": "popover",
+            "html": "<div style='display:flex;flex-direction:column;gap:12px;padding:16px'><div><h2>Share</h2><small>Anyone with the link can view this board. They can't edit it.</small></div><div style='display:flex;gap:8px'><select><option>Expires: 7 days</option></select><button class='primary'>Create link</button></div><p class='wf-muted' style='font-size:13px'>No links yet.</p></div>"
+          },
+          "after": {
+            "type": "wireframe",
+            "surface": "popover",
+            "html": "<div style='display:flex;flex-direction:column;gap:12px;padding:16px'><div><h2>Share</h2><small>Anyone with the link can view this board. They can't edit it.</small></div><div style='display:flex;gap:8px'><select><option>Expires: 7 days</option></select><button class='primary'>Create link</button></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px;padding:10px' data-change='added'><div style='display:flex;align-items:center;gap:8px'><code style='font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>/s/k3J9\u2026x2Qa</code><button class='danger' style='padding:3px 10px'>Revoke</button></div><small>Expires Oct 13, 2026</small></div></div>"
+          },
+          "caption": "The *Expires* menu offers 1 day, 7 days, 30 days, and Never. Choosing Never still produces a 7-day link \u2014 see the risk note on `src/server/routes.ts:31`."
+        },
+        {
+          "type": "states",
+          "id": "role-matrix",
+          "title": "Who can do what",
+          "corner": "Action",
+          "columns": [
+            "Owner",
+            "Editor",
+            "Viewer",
+            "Link visitor"
+          ],
+          "rows": [
+            {
+              "label": "View the board",
+              "cells": [
+                true,
+                true,
+                true,
+                {
+                  "value": "Read-only",
+                  "was": false
+                }
+              ]
+            },
+            {
+              "label": "Rename the board",
+              "cells": [
+                true,
+                true,
+                false,
+                false
+              ]
+            },
+            {
+              "label": "See the **Share** button",
+              "cells": [
+                {
+                  "value": true,
+                  "was": false
+                },
+                false,
+                false,
+                false
+              ]
+            },
+            {
+              "label": "Create or revoke links",
+              "cells": [
+                {
+                  "value": true,
+                  "was": false
+                },
+                false,
+                false,
+                false
+              ]
+            }
+          ],
+          "caption": "Highlighted cells are new in this change. Link visitors get `role: \"viewer\"` and `readOnly: true` from the public route."
+        }
+      ]
+    },
+    {
+      "title": "Data and API",
+      "blocks": [
+        {
+          "type": "diagram",
+          "id": "layers",
+          "caption": "Where the new pieces sit. Green is new; yellow changed.",
+          "html": [
+            "<div class='dg-lanes'>",
+            "  <div class='dg-lane'><div class='dg-title'>Web</div><div class='dg-node changed'><b>ProjectHeader</b><small>Share button, pill</small></div><div class='dg-node added'><b>SharePopover</b><small>create / revoke</small></div></div>",
+            "  <div class='dg-lane'><div class='dg-title'>Routes</div><div class='dg-node changed'><b>routes.ts</b><small>+3 routes, 1 public</small></div></div>",
+            "  <div class='dg-lane'><div class='dg-title'>Domain</div><div class='dg-node added'><b>shareLinks.ts</b><small>token lifecycle</small></div><div class='dg-node changed'><b>permissions.ts</b><small>+ canShare</small></div></div>",
+            "  <div class='dg-lane'><div class='dg-title'>Data</div><div class='dg-node store added'><b>share_links</b></div><div class='dg-node store changed'><b>projects</b><small>+ visibility</small></div></div>",
+            "</div>"
+          ]
+        },
+        {
+          "type": "dataModel",
+          "id": "schema",
+          "entities": [
+            {
+              "name": "share_links",
+              "change": "added",
+              "note": "One row per link. The raw token is never stored.",
+              "fields": [
+                {
+                  "name": "id",
+                  "type": "INTEGER",
+                  "pk": true
+                },
+                {
+                  "name": "project_id",
+                  "type": "INTEGER",
+                  "fk": "projects.id",
+                  "note": "`ON DELETE CASCADE`, indexed"
+                },
+                {
+                  "name": "token_hash",
+                  "type": "TEXT",
+                  "unique": true,
+                  "note": "SHA-256 of the token, hex"
+                },
+                {
+                  "name": "created_by",
+                  "type": "INTEGER",
+                  "fk": "users.id"
+                },
+                {
+                  "name": "expires_at",
+                  "type": "TEXT",
+                  "nullable": true,
+                  "note": "NULL = never"
+                },
+                {
+                  "name": "revoked_at",
+                  "type": "TEXT",
+                  "nullable": true,
+                  "note": "Soft revoke"
+                },
+                {
+                  "name": "created_at",
+                  "type": "TEXT"
+                }
+              ]
+            },
+            {
+              "name": "projects",
+              "change": "modified",
+              "fields": [
+                {
+                  "name": "id",
+                  "type": "INTEGER",
+                  "pk": true
+                },
+                {
+                  "name": "owner_id",
+                  "type": "INTEGER",
+                  "fk": "users.id"
+                },
+                {
+                  "name": "name",
+                  "type": "TEXT"
+                },
+                {
+                  "name": "visibility",
+                  "type": "TEXT 'private' | 'link'",
+                  "change": "added",
+                  "note": "Defaults to `private`; existing rows are backfilled by the default"
+                },
+                {
+                  "name": "created_at",
+                  "type": "TEXT"
+                }
+              ]
+            }
+          ],
+          "relations": [
+            {
+              "from": "share_links.project_id",
+              "to": "projects.id",
+              "change": "added"
+            },
+            {
+              "from": "share_links.created_by",
+              "to": "users.id",
+              "change": "added"
+            }
+          ]
+        },
+        {
+          "type": "callout",
+          "kind": "note",
+          "title": "Migration is additive",
+          "md": "`002_share_links.sql` only creates a table and adds a defaulted column, so it's safe to run on a live database. There is no down migration."
+        },
+        {
+          "type": "code",
+          "id": "fk-pragma",
+          "file": "src/db/client.ts",
+          "summary": "Unchanged, but the new `ON DELETE CASCADE` depends on it.",
+          "annotations": [
+            {
+              "line": 5,
+              "kind": "note",
+              "text": "SQLite ignores foreign keys unless this pragma is on, so deleting a project only removes its links because of this line."
+            }
+          ]
+        },
+        {
+          "type": "api",
+          "id": "endpoints",
+          "endpoints": [
+            {
+              "method": "POST",
+              "path": "/projects/{id}/share-links",
+              "change": "added",
+              "auth": "owner",
+              "summary": "Create a link. Returns the raw token exactly once, inside `url`.",
+              "params": [
+                {
+                  "name": "id",
+                  "in": "path",
+                  "type": "integer",
+                  "required": true
+                },
+                {
+                  "name": "ttlDays",
+                  "in": "body",
+                  "type": "integer 1\u201390 | null",
+                  "note": "Defaults to 7. `null` is meant to mean *never*, but is currently coerced to 7."
+                }
+              ],
+              "request": {
+                "example": "{\"ttlDays\": 30}"
+              },
+              "responses": [
+                {
+                  "status": 201,
+                  "label": "Created",
+                  "example": "{\"id\": 12, \"url\": \"/s/k3J9mQ\u2026x2Qa\", \"expiresAt\": \"2026-11-05T22:30:00.000Z\"}"
+                },
+                {
+                  "status": 400,
+                  "label": "TTL out of range",
+                  "example": "{\"error\": \"invalid_ttl\"}"
+                },
+                {
+                  "status": 403,
+                  "label": "Not an owner",
+                  "example": "{\"error\": \"forbidden\"}"
+                }
+              ]
+            },
+            {
+              "method": "DELETE",
+              "path": "/projects/{id}/share-links/{linkId}",
+              "change": "added",
+              "auth": "owner",
+              "summary": "Soft-revoke a link. If no live links remain, the project goes back to `private`.",
+              "responses": [
+                {
+                  "status": 204,
+                  "label": "Revoked"
+                },
+                {
+                  "status": 403,
+                  "label": "Not an owner",
+                  "example": "{\"error\": \"forbidden\"}"
+                }
+              ]
+            },
+            {
+              "method": "GET",
+              "path": "/s/{token}",
+              "change": "added",
+              "auth": "public",
+              "summary": "Resolve a token to a read-only board. Unknown, expired, and revoked tokens all return the same 404.",
+              "responses": [
+                {
+                  "status": 200,
+                  "label": "Live link",
+                  "example": "{\"project\": {\"id\": 42, \"name\": \"Q3 Launch Plan\"}, \"role\": \"viewer\", \"readOnly\": true}"
+                },
+                {
+                  "status": 404,
+                  "label": "Unknown, expired, or revoked",
+                  "example": "{\"error\": \"link_not_found\"}"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "mermaid",
+          "id": "resolve-flow",
+          "caption": "How a visitor's request is resolved. The token is hashed before the lookup, so the database never sees it.",
+          "source": "sequenceDiagram\n  participant V as Link visitor\n  participant R as GET /s/:token\n  participant S as resolveShareLink\n  participant DB as share_links\n  V->>R: /s/k3J9\u2026x2Qa\n  R->>S: token\n  S->>S: sha256(token)\n  S->>DB: WHERE token_hash = ?\n  DB-->>S: row or nothing\n  alt revoked, expired, or missing\n    S-->>R: null\n    R-->>V: 404 link_not_found\n  else live\n    S-->>R: { projectId }\n    R-->>V: 200 { id, name } read-only\n  end"
+        }
+      ]
+    }
+  ],
+  "keyChanges": [
+    {
+      "file": "src/server/routes.ts",
+      "summary": "Adds the create, revoke, and public resolve routes. Create and revoke are gated on the new `canShare`; the public route needs no session.",
+      "annotations": [
+        {
+          "line": 29,
+          "kind": "note",
+          "text": "Gate is `canShare`, not `canEdit` \u2014 editors get a 403 here."
+        },
+        {
+          "line": 31,
+          "kind": "risk",
+          "text": "`req.body.ttlDays ?? 7` turns an explicit `null` (the popover's *Never*) into 7. Use `'ttlDays' in req.body ? req.body.ttlDays : 7`."
+        },
+        {
+          "line": 36,
+          "kind": "note",
+          "text": "The only place the raw token ever leaves the server."
+        },
+        {
+          "line": 49,
+          "to": 55,
+          "kind": "decision",
+          "text": "Public route. It selects only `id, name`, so board contents aren't exposed by this route alone. Unknown, expired, and revoked tokens all return the same 404, so a visitor can't tell them apart."
+        }
+      ]
+    },
+    {
+      "file": "src/server/shareLinks.ts",
+      "summary": "New module that owns token generation, hashing, lookup, and revocation, and keeps `projects.visibility` in sync.",
+      "annotations": [
+        {
+          "line": 13,
+          "kind": "praise",
+          "text": "Tokens are hashed with SHA-256 before storage, so a database leak doesn't leak working links."
+        },
+        {
+          "line": 17,
+          "kind": "note",
+          "text": "24 random bytes \u2192 32-char base64url token (192 bits)."
+        },
+        {
+          "line": 24,
+          "kind": "question",
+          "text": "The insert and the visibility update aren't in a transaction. Fine for SQLite in practice, but worth a `db.transaction` if this moves to Postgres."
+        },
+        {
+          "line": 36,
+          "kind": "note",
+          "text": "Expiry is enforced at read time \u2014 nothing deletes old rows."
+        },
+        {
+          "line": 45,
+          "to": 47,
+          "kind": "risk",
+          "text": "Counts links with `revoked_at IS NULL` but ignores `expires_at`. When every link has simply expired, the project stays `link` and keeps showing *Shared by link*."
+        }
+      ]
+    },
+    {
+      "file": "src/web/components/ProjectHeader.tsx",
+      "summary": "Header renders the *Shared by link* pill and an owner-only **Share** button that toggles the popover.",
+      "annotations": [
+        {
+          "line": 16,
+          "kind": "decision",
+          "text": "Re-implements `canShare` on the client instead of importing it. Harmless today; the server check is the real gate."
+        },
+        {
+          "line": 21,
+          "kind": "note",
+          "text": "Pill is driven by `project.visibility`, so it inherits the expiry issue in `shareLinks.ts`."
+        },
+        {
+          "line": 24,
+          "kind": "note",
+          "text": "Only owners see **Share**."
+        }
+      ]
+    },
+    {
+      "file": "src/server/permissions.ts",
+      "summary": "One new permission. Owners only.",
+      "annotations": [
+        {
+          "line": 21,
+          "to": 23,
+          "kind": "note",
+          "text": "Deliberately narrower than `canEdit`."
+        }
+      ]
+    },
+    {
+      "file": "src/db/migrations/002_share_links.sql",
+      "summary": "Creates `share_links` and adds `projects.visibility` with a default, so existing rows need no backfill.",
+      "annotations": [
+        {
+          "line": 4,
+          "kind": "note",
+          "text": "Links are deleted with their project."
+        },
+        {
+          "line": 14,
+          "to": 15,
+          "kind": "note",
+          "text": "SQLite allows `ADD COLUMN` with a `CHECK` because the default satisfies it."
+        }
+      ]
+    }
+  ],
+  "questions": [
+    "Should *Never expires* exist at all for public links, or should 90 days be the ceiling?",
+    "Should editors be allowed to create links, or is owners-only right?"
+  ],
+  "checks": {
+    "verified": [
+      {
+        "text": "New unit tests cover token hashing, expiry, revocation, and `canShare`.",
+        "cmd": "npm test"
+      },
+      "Migration applies cleanly on a copy of the seed database."
+    ],
+    "manual": [
+      "As an owner, create a link with **Never** and confirm what expiry it actually gets.",
+      "Open a link in a private window and confirm the board is read-only.",
+      "Revoke the last link and confirm the *Shared by link* pill disappears."
+    ]
+  },
+  "files": {
+    "README.md": {
+      "group": "Docs",
+      "review": "skim",
+      "note": "Uncommitted: one line about sharing."
+    },
+    "package-lock.json": {
+      "group": "Generated",
+      "review": "skip",
+      "note": "Lockfile churn only."
+    },
+    "src/db/migrations/002_share_links.sql": {
+      "group": "Data",
+      "review": "careful",
+      "note": "New table + column."
+    },
+    "src/server/permissions.ts": {
+      "group": "Server",
+      "review": "careful",
+      "note": "Adds `canShare`."
+    },
+    "src/server/routes.ts": {
+      "group": "Server",
+      "review": "careful",
+      "note": "Three new routes, one public."
+    },
+    "src/server/shareLinks.ts": {
+      "group": "Server",
+      "review": "careful",
+      "note": "Token lifecycle."
+    },
+    "src/web/components/ProjectHeader.tsx": {
+      "group": "Web",
+      "review": "skim",
+      "note": "Share button + pill."
+    },
+    "src/web/components/SharePopover.tsx": {
+      "group": "Web",
+      "review": "skim",
+      "note": "New popover; presentational."
+    },
+    "tests/permissions.test.ts": {
+      "group": "Tests",
+      "review": "skim"
+    },
+    "tests/shareLinks.test.ts": {
+      "group": "Tests",
+      "review": "skim"
+    },
+    ".env": {
+      "group": "Config",
+      "review": "careful",
+      "note": "Untracked and **not gitignored** \u2014 don't commit it."
+    }
+  }
+}

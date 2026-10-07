@@ -1,0 +1,94 @@
+# /human-review
+
+Turn a branch, pull request, commit range, or your uncommitted work into a
+single HTML page that a person can review in a few minutes.
+
+The page leads with the shape of the change, then drops into the code:
+
+- **Title, brief, and risk read**: what changed, for whom, and whether to worry.
+- **Footprint bar**: where the weight of the change sits (server vs. tests vs.
+  generated files), so you know at a glance how much of it actually needs
+  reading.
+- **Where to look, in order**: a reading path of three to six stops, each
+  linked to the exact line.
+- **Visuals for what diffs are bad at**: before/after wireframes (sketch or
+  clean), screenshots, permission matrices, data-model cards with per-field
+  changes, API cards with example payloads, and Mermaid or hand-laid diagrams.
+- **Key changes**: annotated diffs of the files that carry the change, with
+  margin notes colored by kind (risk, question, decision, note), split or
+  unified views, word-level highlights, and expandable context.
+- **Before you approve**: the agent's open questions (answer them inline),
+  what it actually verified, and a checklist of things to try yourself.
+- **All files**: every changed file, grouped and triaged as *read closely*,
+  *skim*, or *skip*, each expandable to its full diff, with a *Viewed*
+  checkbox and a progress bar.
+
+You can comment on any line or block, pick a verdict, and press **Copy
+feedback for the agent**. You get Markdown with file:line anchors that you
+paste back into your agent session, and the agent works through it.
+
+## Self-contained by design
+
+- **One HTML file.** The renderer, highlight.js, marked, rough.js, Mermaid
+  (only when used), and the sketch font are bundled in this skill and inlined
+  into the page. There's no server, account, CDN, or network request.
+  Double-click to open; attach it to a PR or a message to share.
+- **No install step.** The CLI is a single script with zero npm dependencies.
+  It runs under Bun or Node 18+, whichever you have, and needs git (plus `gh`
+  for `--pr`).
+- **Code on the page comes from git, not from the model.** The agent
+  references files and line numbers; the build pulls the real hunks, and
+  rejects annotations that point at lines that don't exist.
+- **Private by default.** Output goes to `<repo>/.human-review/`, which is
+  added to `.git/info/exclude`. Secret-looking values (API keys, tokens,
+  private keys, `.env` values) are redacted from the embedded diff. Review
+  state (comments, viewed files, verdict) lives in the reviewer's browser.
+
+## Usage
+
+In Claude Code:
+
+```
+/human-review              # current branch vs. default branch, plus uncommitted work
+/human-review 123          # a pull request (uses the GitHub CLI)
+/human-review main..feature
+```
+
+Or just ask: "make a human review of this branch", or "recap what we changed
+for review".
+
+The agent runs (`bun` and `node` are interchangeable here):
+
+```bash
+node scripts/human-review.mjs collect [--base REF] [--head REF] [--pr N] [--no-uncommitted]
+#   → .human-review/<branch>/review.txt   line-numbered diff the agent reads
+#   → .human-review/<branch>/recap.json   skeleton the agent fills in
+node scripts/human-review.mjs build .human-review/<branch> --open
+#   → .human-review/<branch>/review.html
+```
+
+## Layout
+
+```
+human-review/
+  SKILL.md                 instructions for the agent
+  scripts/human-review.mjs collect / build / open CLI (zero dependencies)
+  assets/
+    template.html          page shell
+    app.js, app.css        renderer
+    vendor/                highlight.js, marked, rough.js, mermaid, font, licenses
+  references/
+    format.md              recap.json schema for every block
+    wireframes.md          how to write wireframes that read well
+    diagrams.md            Mermaid and HTML diagram primitives
+    example-recap.json     a complete example
+```
+
+## Credits
+
+Inspired by Builder.io's
+[visual-recap](https://github.com/BuilderIO/skills/tree/main/skills/visual-recap),
+whose structure and wireframe guidance this adapts. The difference here is
+that everything is self-contained in the skill instead of depending on a
+hosted plans app. Third-party licenses are in
+`assets/vendor/THIRD_PARTY_LICENSES.txt`.
