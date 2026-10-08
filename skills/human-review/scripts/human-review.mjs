@@ -252,7 +252,14 @@ function generatedReason(p) {
 // Indentation is meaningful in these, so only trailing whitespace may differ.
 const INDENT_SENSITIVE = /\.(py|pyi|ya?ml|mk|pug|jade|haml|slim|sass|styl|coffee|nim|fs|fsx)$|(^|\/)(makefile|gnumakefile)$/i;
 const lineKey = (file, s) => (INDENT_SENSITIVE.test(file) ? s.replace(/\s+$/, "") : s.trim());
-const hasWord = (s) => /[A-Za-z0-9]/.test(s);
+// Does a line identify itself? `continue;`, `} else {`, and `return null;` appear everywhere, so
+// matching them proves nothing; a line needs some non-keyword content to count as a move.
+const TRIVIAL_WORDS = new Set(["return", "break", "continue", "else", "elif", "end", "fi", "done", "do", "then", "pass", "null", "nil", "none", "true", "false", "undefined", "default", "try", "finally", "begin", "esac", "endif", "this", "self", "super", "new", "await", "yield", "export", "const", "let", "var", "def", "fn", "func", "function", "public", "private", "static"]);
+const hasIdentity = (s) =>
+  s
+    .split(/[^A-Za-z0-9_$]+/)
+    .filter((w) => w && !TRIVIAL_WORDS.has(w.toLowerCase()))
+    .join("").length >= 3;
 
 // Pairs removed and added lines with the same content: first within a hunk (re-indents,
 // in-place reorders), then anywhere in the change (moves). Paired lines get
@@ -295,12 +302,12 @@ function analyzeMechanical(files) {
   // 1. Within a hunk: re-indents and in-place reorders.
   pairBy((e) => `${e.f.path}\0${e.hi}\0${e.key}`);
   // 2. Anywhere in the change, for lines with real content: moves.
-  pairBy((e) => (hasWord(e.key) ? e.key : null));
+  pairBy((e) => (hasIdentity(e.key) ? e.key : null));
   // 3. Punctuation-only lines (`}`, `);`) carry no identity, so they only pair within a file
   //    or with a file that real moved lines already tie this one to — never arbitrarily.
   const linked = new Map();
   for (const e of entries) {
-    if (!e.partner || e.partner.f === e.f) continue;
+    if (!e.partner || e.partner.f === e.f || !hasIdentity(e.key)) continue;
     if (!linked.has(e.f.path)) linked.set(e.f.path, new Set());
     linked.get(e.f.path).add(e.partner.f.path);
   }
@@ -324,7 +331,7 @@ function analyzeMechanical(files) {
     }
     // Every non-blank changed line must have a partner, and a file whose only changes are
     // punctuation lines (braces, brackets) proves nothing.
-    if (!mine.every((e) => e.partner) || !mine.some((e) => hasWord(e.key))) continue;
+    if (!mine.every((e) => e.partner) || !mine.some((e) => hasIdentity(e.key))) continue;
     const moved = mine.filter((e) => e.l.mv[0] === "moved");
     const indented = mine.filter((e) => e.l.mv[0] === "indent").length / 2;
     const others = [...new Set(moved.map((e) => e.l.mv[1]).filter((p) => p !== f.path))];
@@ -342,7 +349,7 @@ function analyzeMechanical(files) {
 
 // ───────────────────────────────────────────────────────────── tests and concerns
 
-const TEST_PATH = /(^|\/)(__tests__|tests?|spec|specs|e2e)\/|\.(test|spec)\.[A-Za-z0-9]+$|_(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+$|[a-z0-9]Tests?\.[A-Za-z]+$/;
+const TEST_PATH = /(^|\/)(__tests__|tests?|test-d|tests?-[a-z]+|[a-z]+-tests?|spec|specs|e2e)\/|\.(test|spec)\.[A-Za-z0-9]+$|_(test|spec)\.[A-Za-z0-9]+$|(^|\/)test_[^/]+$|[a-z0-9]Tests?\.[A-Za-z]+$/;
 const isTestPath = (p) => TEST_PATH.test(p);
 
 // The name of the thing a test file tests: foo.test.ts, foo_test.go, test_foo.py,
@@ -567,17 +574,20 @@ function redactHunks(f, redact, readOld, readNew) {
   const all = f.hunks.flatMap((h) => [h.header, ...h.lines.map((l) => l.s)]);
   let oldKeys = new Set();
   let newKeys = new Set();
+  let blind = false; // couldn't read a side we needed: redact anything that looks like key material
   if (all.some(mayHoldKey)) {
     const oldText = f.status === "added" ? null : readOld(f.oldPath || f.path);
     const newText = f.status === "deleted" ? null : readNew(f.path);
     if (oldText) oldKeys = keyLines(oldText.split("\n"));
     if (newText) newKeys = keyLines(newText.split("\n"));
+    blind = (f.status !== "added" && oldText == null) || (f.status !== "deleted" && newText == null);
   }
-  const anyKeys = oldKeys.size + newKeys.size > 0;
+  const anyKeys = blind || oldKeys.size + newKeys.size > 0;
+  const looksLikeKey = (s) => s.length >= 40 && BASE64_LINE.test(s);
   for (const h of f.hunks) {
-    h.header = anyKeys && h.header.length >= 40 && BASE64_LINE.test(h.header) ? (redact.bump(), REDACTED) : redact(h.header, f.path);
+    h.header = anyKeys && looksLikeKey(h.header) ? (redact.bump(), REDACTED) : redact(h.header, f.path);
     for (const l of h.lines) {
-      const isKey = (l.t !== "+" && oldKeys.has(l.o)) || (l.t !== "-" && newKeys.has(l.n));
+      const isKey = (l.t !== "+" && oldKeys.has(l.o)) || (l.t !== "-" && newKeys.has(l.n)) || (blind && looksLikeKey(l.s));
       l.s = isKey ? (redact.bump(), REDACTED) : redact(l.s, f.path);
     }
   }
@@ -703,7 +713,8 @@ function collect(opts) {
       baseSha = parent || emptyTree(root);
       baseRef = parent ? `${headRef}~1` : "(empty tree)";
     }
-    slug ||= refSlug(headRef === "HEAD" ? headSha.slice(0, 8) : headRef) + (worktree && baseSha === headSha ? "-uncommitted" : "");
+    const shaLike = headRef === "HEAD" || headSha.startsWith(headRef.toLowerCase());
+    slug ||= refSlug(shaLike ? headSha.slice(0, 12) : headRef) + (worktree && baseSha === headSha ? "-uncommitted" : "");
   }
 
   const outRel = opts.out ? path.relative(root, path.resolve(opts.out)) : ".human-review";
@@ -761,7 +772,7 @@ function collect(opts) {
       /* unreadable — treat as ours */
     }
     if (was && (was.head?.ref !== headRef || (was.pr?.number ?? null) !== (pr?.number ?? null)))
-      die(`${outDir} holds a review of ${was.pr ? `PR #${was.pr.number}` : was.head?.ref}, not ${pr ? `PR #${pr.number}` : headRef}. Pass --slug <name> or --out <dir> to keep them apart.`);
+      die(`${outDir} holds a review of ${was.pr ? `PR #${was.pr.number}` : was.head?.ref}, not ${pr ? `PR #${pr.number}` : headRef}. ${opts.out ? "Pass a different --out <dir>." : "Pass --slug <name> or --out <dir> to keep them apart."}`);
   }
   fs.mkdirSync(outDir, { recursive: true });
   if (!opts.out) excludeFromGit(root, ".human-review");
@@ -1182,6 +1193,7 @@ function validate(recap, diff, recapDir) {
   }
   if (recap.summary !== undefined && !(Array.isArray(recap.summary) && recap.summary.every((x) => typeof x === "string"))) err("summary", "must be an array of strings");
   if (Array.isArray(recap.summary) && recap.summary.length === 0) warn("summary", "empty — add 2–5 bullets");
+  if (Array.isArray(recap.focus) && recap.focus.length === 0 && diff.files.length > 2) warn("focus", "empty — add 3–6 stops, riskiest first");
   if (recap.questions !== undefined && !isStringList(recap.questions)) err("questions", "must be an array of non-empty strings");
   if (recap.checks !== undefined) {
     const c = recap.checks;
@@ -1203,8 +1215,9 @@ function validate(recap, diff, recapDir) {
     } else {
       // Slug of the title, made unique against built-in sections, other sections, and block ids.
       const base = String(s.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50) || `section-${i + 1}`;
-      s.id = /^[a-z]/.test(base) ? base : `s-${base}`;
-      for (let n = 2; isReservedId(s.id) || sectionIds.has(s.id) || declared.has(s.id); n++) s.id = `${base}-${n}`;
+      const start = /^[a-z]/.test(base) ? base : `s-${base}`;
+      s.id = start;
+      for (let n = 2; isReservedId(s.id) || sectionIds.has(s.id) || declared.has(s.id); n++) s.id = `${start}-${n}`;
     }
     sectionIds.add(s.id);
     s.blocks.forEach((b, j) => block(b, `${sp}.blocks[${j}]`));
@@ -1254,6 +1267,7 @@ function validate(recap, diff, recapDir) {
         const cp = `concerns[${i}]`;
         if (!c || typeof c !== "object") return err(cp, "must be an object");
         if (typeof c.title !== "string" || !c.title.trim()) err(cp, "needs a `title` naming what these files do together");
+        else if (c.files && c.files.length > 1 && !(typeof c.why === "string" && c.why.trim())) warn(`${cp}.why`, `"${c.title}" has no one-line \`why\``);
         if (!Array.isArray(c.files) || !c.files.length) return err(cp, "needs a non-empty `files` list, in reading order");
         c.files.forEach((p, j) => {
           if (!byPath.has(p)) {

@@ -28,7 +28,7 @@ Don't draw a diagram that just restates the file list.
   "  A[Request] --> B{2xx?}",
   "  B -- yes --> C[Return]",
   "  B -- no --> D[Backoff]:::added --> E[Retry ≤ 3]:::added --> B",
-  "  classDef added stroke:#1b7a36,stroke-width:2px"
+  "  classDef added stroke-width:3px"
 ]}
 ```
 

@@ -18,8 +18,9 @@ Conventions:
 - Any block can have an `id`: unique across the file, starting with a letter,
   using only letters, digits, `-` and `_`. Give one to blocks you reference
   from `focus` (`"ref": "#schema"`). The others get ids derived from their
-  content. The page reserves `top`, `main`, `overview`, `key-changes`,
-  `checks`, and `files`.
+  content. The page reserves `top`, `main`, `app`, `overview`, `key-changes`,
+  `checks`, `files`, `hr-data`, `hr-title`, and `hr-top-title`, and ids
+  starting with `file-`, `v-`, `mmd` plus a digit, or `t` plus digits and `-`.
 - The page loads nothing from the network: its Content-Security-Policy blocks
   remote images, fonts, and stylesheets. Show screenshots with `screenshot`
   blocks, which embed the image.

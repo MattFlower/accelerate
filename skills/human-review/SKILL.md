@@ -122,8 +122,8 @@ wireframes aren't cramped or overlapping, that diagrams render, and that notes
 sit on the lines they describe. If the browser can't open `file://` URLs, serve
 the folder with any static server on localhost. Do one fix-and-rebuild pass,
 not an open-ended polish loop. If you can't render pages (a headless or CI
-run), the build's validation is your check; say in the handoff that you didn't
-look at it.
+run), a clean `build` is your check; say in the handoff that you didn't look at
+it.
 
 ### 7. Hand off
 
@@ -152,14 +152,24 @@ answer each one only once:
 Then `questions` and `checks` close the loop: what you need from them, what you
 already verified, and what they should try themselves.
 
-**The reviewer reads before they see your conclusions.** The page holds back your
-findings (the `risk` rating, `risk`, `question`, and `praise` annotations, and
-`risk`, `security`, and `question` callouts) until the reviewer has viewed that
-file or asks to see them. Research on AI-assisted review found that showing an
-AI's conclusions first makes reviewers fixate on what it flagged and miss the
-rest. So keep the always-visible parts (`brief`, `summary`, `focus`, notes,
-decisions) descriptive: say what changed and where to look, and put what you
-*concluded* in the held-back fields.
+**The reviewer reads before they see your conclusions.** Research on
+AI-assisted review found that showing an AI's conclusions first makes reviewers
+fixate on what it flagged and miss the rest. So the page holds back your
+*findings* until the reviewer has viewed that file or asks to see them:
+
+- **Held back:** `risk` (the level *and* its `why`); `risk`, `question`, and
+  `praise` annotations; `risk`, `security`, and `question` callouts.
+- **Always visible:** everything else: `title`, `brief`, `summary`, `focus`,
+  sections (wireframes, diagrams, captions, API and states notes), `note`,
+  `decision`, `breaking`, and `perf` callouts, `note` and `decision`
+  annotations, key-change summaries, concern and file notes, `questions`, and
+  `checks`.
+
+Write the visible parts **descriptively**: what changed, how it works, where to
+look. Put what you *concluded* (bugs, sharp edges, doubts) only in the held-back
+fields. A visible caption that says "choosing Never still produces a 7-day
+link" gives the finding away; "the Expires menu offers 1 day, 7 days, 30 days,
+and Never" doesn't.
 
 ### The fields that carry the most weight
 
@@ -188,9 +198,20 @@ decisions) descriptive: say what changed and where to look, and put what you
   that uses them, with **each test right after the code it tests**. Don't group
   by layer (Server, Web, Tests): research on review ordering finds that keeping
   related parts together is what helps, and reviewers rate orders with no
-  visible logic among the worst. `collect` writes a starting set (each file
-  with its tests, by directory); rename, merge, and reorder it. The build
-  warns when a test lands in a different concern than its code.
+  visible logic among the worst. `collect` writes a rough starting set (each
+  file with its tests, grouped by directory); expect to rename, merge, and
+  reorder it. The build warns when a test lands in a different concern than its
+  code. Edge cases:
+  - A test that exercises several files goes after the last of them, in the
+    concern of the code it mainly tests. Type-level tests (`test-d/`, `*.test-d.ts`)
+    go with the API they check.
+  - A file that serves several concerns goes in its main one; say what else it
+    touches in its `files` note (and use several key-change tabs, below).
+  - No tests? That's fine: say so in `checks` rather than inventing a concern.
+
+  `focus` and `concerns` are two different orders. `focus` is *where to
+  start*: a few stops, riskiest first. `concerns` is the complete order for
+  everything, and the All files list follows it.
 - **`files`**: a `review` level for each file, and a short `note` for anything
   non-obvious:
   - `careful`: logic, security, data, or contracts. Read every line.
@@ -237,7 +258,9 @@ way the reviewer should read them. Each one gets a one-sentence `summary` (what
 the file's change does and why) and its annotations. Narrow a long file to the
 relevant hunks with `"lines": [start, end]` (new-file numbers). The reviewer can
 still expand the rest. Every file is also in **All files** at the bottom, so
-you don't need a tab for each one.
+you don't need a tab for each one. A big file that changed for several reasons
+can appear in several tabs: give each a `label` and narrow it with `hunks` or
+`lines`. A `path:line` ref opens the tab that shows that line.
 
 ### Visuals: match the change to the block
 
@@ -269,15 +292,20 @@ Rules for visuals:
 
 ### Questions and checks
 
-- **`questions`**: decisions you need from the reviewer, phrased so they can
-  answer in a line. The page has an **Answer** box for each one.
+- **`questions`**: decisions you need from the reviewer about intent or policy,
+  phrased so they can answer in a line ("Should public links be able to never
+  expire?"). They're always visible, so don't restate a finding as a question;
+  the finding goes in a held-back `question` or `risk` annotation. The page has
+  an **Answer** box for each one.
 - **`checks.verified`**: only what you **actually ran or confirmed in this
   session**. Add `cmd` only when the reviewer could rerun it from the repo root
   (`{"text": "...", "cmd": "npm test"}`); describe ad-hoc probes in `text`
-  instead. If you ran nothing, leave it empty. Never imply verification you
-  didn't do.
+  instead. If you ran nothing, leave it empty. Reading the code isn't
+  verification; what you concluded from reading belongs in annotations. Never
+  imply verification you didn't do.
 - **`checks.manual`**: two to five concrete things a human should try, written
-  as steps. The reviewer can tick them off.
+  as steps that don't give away what you expect them to find. The reviewer can
+  tick them off.
 
 ### Honesty
 
@@ -289,8 +317,9 @@ the reviewer skips the line you summarized incorrectly.
   match the diff. If you didn't see it, leave it out.
 - Say "inferred" when you infer.
 - If you find a bug while recapping, flag it as a `risk` annotation, mention it
-  in `risk.why` and `focus`, and tell the user in your handoff. Don't quietly
-  fix code during a review unless they ask.
+  in `risk.why` (both held back until the reviewer's own pass), point a `focus`
+  stop at the area without naming the bug, and tell the user in your handoff.
+  Don't quietly fix code during a review unless they ask.
 
 ## When feedback comes back
 
@@ -313,7 +342,8 @@ line quoted) or to a named block. When the user pastes it:
 - The page contains source code. Treat `review.html` like the repo itself, and
   don't upload or publish it anywhere unless the user asks.
 - `collect` and `build` redact secret-looking values (API keys, tokens, private
-  keys, `.env` values, passwords in config files) and report how many. It's a
+  keys, `.env` values, passwords in config files) and report how many:
+  `collect` for the diff, `build` for the full file contents it embeds. It's a
   heuristic, so never copy a secret into `recap.json`, a wireframe, or an API
   example; use obvious placeholders.
 - The page's Content-Security-Policy blocks all network requests, so remote

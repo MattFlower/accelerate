@@ -743,7 +743,8 @@
             "aria-label": `Comment on line ${num}`,
             onclick: (e) => {
               e.stopPropagation();
-              if (inst.editing && inst.editing.line !== num) inst.draft = "";
+              const side2 = side === "o" ? "old" : "new";
+              if (inst.editing && (inst.editing.line !== num || inst.editing.side !== side2)) inst.draft = "";
               inst.editing = { side: side === "o" ? "old" : "new", line: num };
               inst.focusEditor = true;
               inst.render();
@@ -2393,10 +2394,13 @@ ul, ol { margin: 0; padding-left: 18px; }
       return;
     }
     // Prefer the key-change tab that shows the line.
-    const idx = keyBlocks.findIndex((b) => b.file === r.file);
-    if (idx >= 0 && keyTabs) {
-      keyTabs._select(idx);
+    // A file can have several key-change tabs (split by hunks): use the one showing the line.
+    const tabsForFile = keyBlocks.map((b, i) => (b.file === r.file ? i : -1)).filter((i) => i >= 0);
+    if (tabsForFile.length && keyTabs) {
       const panel = keyTabs.querySelector(".tabpanel");
+      let idx = tabsForFile[0];
+      if (r.line != null) idx = tabsForFile.find((i) => findRow(keyTabs._panelFor(i), r.line)) ?? idx;
+      keyTabs._select(idx);
       if (r.line == null) return panel.scrollIntoView({ behavior: "smooth", block: "start" });
       let tr = findRow(panel, r.line);
       if (!tr) {

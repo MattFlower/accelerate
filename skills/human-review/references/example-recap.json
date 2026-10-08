@@ -29,7 +29,7 @@
       "ref": "src/server/shareLinks.ts:29"
     },
     {
-      "title": "When a board stops being \u201cshared\u201d",
+      "title": "When a board stops being “shared”",
       "why": "Check every way a link stops being live (revoked, expired) and whether visibility follows.",
       "ref": "src/server/shareLinks.ts:45"
     }
@@ -53,7 +53,7 @@
             "surface": "browser",
             "url": "teamboard.app/projects/42",
             "height": 250,
-            "html": "<div style='display:flex;flex-direction:column;gap:16px;padding:18px 22px;height:100%'><div style='display:flex;align-items:center;gap:12px;width:100%'><h1>Q3 Launch Plan</h1><span class='wf-pill' data-change='added' data-note='**Shared by link** pill appears while any link is live (`projects.visibility = link`).'>Shared by link</span><div style='flex:1'></div><button>Rename</button><button data-change='added' data-note='**Share** is only rendered for owners \u2014 editors and viewers never see it.'><span data-icon='link'></span>Share</button><button aria-label='More'><span data-icon='more'></span></button></div><hr><div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px'><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>To do</h3><div class='wf-box'>Draft launch email</div><div class='wf-box'>Book demo slots</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Doing</h3><div class='wf-box'>Pricing page copy</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Done</h3><div class='wf-box'>Beta feedback summary</div></div></div></div>"
+            "html": "<div style='display:flex;flex-direction:column;gap:16px;padding:18px 22px;height:100%'><div style='display:flex;align-items:center;gap:12px;width:100%'><h1>Q3 Launch Plan</h1><span class='wf-pill' data-change='added' data-note='**Shared by link** pill appears while any link is live (`projects.visibility = link`).'>Shared by link</span><div style='flex:1'></div><button>Rename</button><button data-change='added' data-note='**Share** is only rendered for owners — editors and viewers never see it.'><span data-icon='link'></span>Share</button><button aria-label='More'><span data-icon='more'></span></button></div><hr><div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px'><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>To do</h3><div class='wf-box'>Draft launch email</div><div class='wf-box'>Book demo slots</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Doing</h3><div class='wf-box'>Pricing page copy</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Done</h3><div class='wf-box'>Beta feedback summary</div></div></div></div>"
           },
           "caption": "Project header as an owner sees it. Layout inferred from `ProjectHeader.tsx`; board columns are illustrative."
         },
@@ -61,7 +61,7 @@
           "type": "compare",
           "id": "popover-states",
           "labels": [
-            "Share popover \u2014 no links yet",
+            "Share popover — no links yet",
             "After creating a link"
           ],
           "before": {
@@ -72,9 +72,9 @@
           "after": {
             "type": "wireframe",
             "surface": "popover",
-            "html": "<div style='display:flex;flex-direction:column;gap:12px;padding:16px'><div><h2>Share</h2><small>Anyone with the link can view this board. They can't edit it.</small></div><div style='display:flex;gap:8px'><select><option>Expires: 7 days</option></select><button class='primary'>Create link</button></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px;padding:10px' data-change='added'><div style='display:flex;align-items:center;gap:8px'><code style='font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>/s/k3J9\u2026x2Qa</code><button class='danger' style='padding:3px 10px'>Revoke</button></div><small>Expires Oct 13, 2026</small></div></div>"
+            "html": "<div style='display:flex;flex-direction:column;gap:12px;padding:16px'><div><h2>Share</h2><small>Anyone with the link can view this board. They can't edit it.</small></div><div style='display:flex;gap:8px'><select><option>Expires: 7 days</option></select><button class='primary'>Create link</button></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px;padding:10px' data-change='added'><div style='display:flex;align-items:center;gap:8px'><code style='font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>/s/k3J9…x2Qa</code><button class='danger' style='padding:3px 10px'>Revoke</button></div><small>Expires Oct 13, 2026</small></div></div>"
           },
-          "caption": "The *Expires* menu offers 1 day, 7 days, 30 days, and Never. Choosing Never still produces a 7-day link \u2014 see the risk note on `src/server/routes.ts:31`."
+          "caption": "The *Expires* menu offers 1 day, 7 days, 30 days, and Never; the choice is sent as `ttlDays`."
         },
         {
           "type": "states",
@@ -251,7 +251,7 @@
           "type": "callout",
           "kind": "note",
           "title": "Migration is additive",
-          "md": "`002_share_links.sql` only creates a table and adds a defaulted column, so it's safe to run on a live database. There is no down migration."
+          "md": "`002_share_links.sql` only creates a table and adds a defaulted column. There is no down migration."
         },
         {
           "type": "code",
@@ -286,8 +286,8 @@
                 {
                   "name": "ttlDays",
                   "in": "body",
-                  "type": "integer 1\u201390 | null",
-                  "note": "Defaults to 7. `null` is meant to mean *never*, but is currently coerced to 7."
+                  "type": "integer 1–90 | null",
+                  "note": "Defaults to 7. The popover sends `null` for *Never*."
                 }
               ],
               "request": {
@@ -297,7 +297,7 @@
                 {
                   "status": 201,
                   "label": "Created",
-                  "example": "{\"id\": 12, \"url\": \"/s/k3J9mQ\u2026x2Qa\", \"expiresAt\": \"2026-11-05T22:30:00.000Z\"}"
+                  "example": "{\"id\": 12, \"url\": \"/s/k3J9mQ…x2Qa\", \"expiresAt\": \"2026-11-05T22:30:00.000Z\"}"
                 },
                 {
                   "status": 400,
@@ -354,7 +354,7 @@
           "type": "mermaid",
           "id": "resolve-flow",
           "caption": "How a visitor's request is resolved. The token is hashed before the lookup, so the database never sees it.",
-          "source": "sequenceDiagram\n  participant V as Link visitor\n  participant R as GET /s/:token\n  participant S as resolveShareLink\n  participant DB as share_links\n  V->>R: /s/k3J9\u2026x2Qa\n  R->>S: token\n  S->>S: sha256(token)\n  S->>DB: WHERE token_hash = ?\n  DB-->>S: row or nothing\n  alt revoked, expired, or missing\n    S-->>R: null\n    R-->>V: 404 link_not_found\n  else live\n    S-->>R: { projectId }\n    R-->>V: 200 { id, name } read-only\n  end"
+          "source": "sequenceDiagram\n  participant V as Link visitor\n  participant R as GET /s/:token\n  participant S as resolveShareLink\n  participant DB as share_links\n  V->>R: /s/k3J9…x2Qa\n  R->>S: token\n  S->>S: sha256(token)\n  S->>DB: WHERE token_hash = ?\n  DB-->>S: row or nothing\n  alt revoked, expired, or missing\n    S-->>R: null\n    R-->>V: 404 link_not_found\n  else live\n    S-->>R: { projectId }\n    R-->>V: 200 { id, name } read-only\n  end"
         }
       ]
     }
@@ -367,7 +367,7 @@
         {
           "line": 29,
           "kind": "note",
-          "text": "Gate is `canShare`, not `canEdit` \u2014 editors get a 403 here."
+          "text": "Gate is `canShare`, not `canEdit` — editors get a 403 here."
         },
         {
           "line": 31,
@@ -399,7 +399,7 @@
         {
           "line": 17,
           "kind": "note",
-          "text": "24 random bytes \u2192 32-char base64url token (192 bits)."
+          "text": "24 random bytes → 32-char base64url token (192 bits)."
         },
         {
           "line": 24,
@@ -409,7 +409,7 @@
         {
           "line": 36,
           "kind": "note",
-          "text": "Expiry is enforced at read time \u2014 nothing deletes old rows."
+          "text": "Expiry is enforced at read time — nothing deletes old rows."
         },
         {
           "line": 45,
@@ -426,12 +426,12 @@
         {
           "line": 16,
           "kind": "decision",
-          "text": "Re-implements `canShare` on the client instead of importing it. Harmless today; the server check is the real gate."
+          "text": "Re-implements `canShare` on the client instead of importing it; the server enforces the real check."
         },
         {
           "line": 21,
           "kind": "note",
-          "text": "Pill is driven by `project.visibility`, so it inherits the expiry issue in `shareLinks.ts`."
+          "text": "Pill is driven by `project.visibility`, which `shareLinks.ts` keeps in sync."
         },
         {
           "line": 24,
@@ -483,7 +483,7 @@
       "Migration applies cleanly on a copy of the seed database."
     ],
     "manual": [
-      "As an owner, create a link with **Never** and confirm what expiry it actually gets.",
+      "As an owner, create a link with **Never** selected and note the expiry it shows.",
       "Open a link in a private window and confirm the board is read-only.",
       "Revoke the last link and confirm the *Shared by link* pill disappears."
     ]
@@ -525,7 +525,7 @@
     },
     ".env": {
       "review": "careful",
-      "note": "Untracked and **not gitignored** \u2014 don't commit it."
+      "note": "Untracked, and not covered by `.gitignore`."
     }
   },
   "concerns": [
@@ -557,7 +557,7 @@
     },
     {
       "title": "Docs and local config",
-      "why": "",
+      "why": "The README line about sharing, and a local env file.",
       "files": [
         "README.md",
         ".env"
