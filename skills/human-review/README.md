@@ -13,7 +13,7 @@ The page leads with the shape of the change, then drops into the code:
   (an author new to the changed files, files mostly written by someone else,
   repeated recent fixes, changes spread across many directories, paths named
   for auth or migrations). Each is tagged *verified*, *author text*, or
-  *inference* and shows the command that reproduces it. Never a score, and
+  *inference*, and history-based rows show the command that reproduces them. Never a score, and
   never read from the PR description.
 - **Footprint bar**: where the weight of the change sits, concern by concern,
   and how much of it is mechanical or generated, so you know at a glance how

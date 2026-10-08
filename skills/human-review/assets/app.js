@@ -2122,7 +2122,7 @@ ul, ol { margin: 0; padding-left: 18px; }
 
   // Provenance of a claim: computed from git or paths, taken from commit wording, or the agent's reading.
   const TAGS = {
-    verified: "Computed from git history or file paths. The command that reproduces it is in the row's tooltip.",
+    verified: "Computed from git history or file paths. Rows from history show the command that reproduces them.",
     "author text": "Counted from git, but classified by what earlier commit messages say.",
     inference: "The agent's own reading of the diff. Not computed.",
   };

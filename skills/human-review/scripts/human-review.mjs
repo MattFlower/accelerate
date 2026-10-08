@@ -542,11 +542,8 @@ function changeAuthors(root, { logRange, worktree }) {
   const names = new Set();
   const add = (name, email) => {
     if (!email) return;
-    const mapped = gitQuiet(["check-mailmap", `${name || "x"} <${email}>`], { cwd: root, timeout: 5000 });
-    const m = mapped && /^(.*?)\s*<([^>]*)>\s*$/.exec(mapped.trim());
-    const [n, e] = m ? [m[1], m[2]] : [name, email];
-    keys.add(e.toLowerCase());
-    if (n) names.add(plainName(n));
+    keys.add(email.toLowerCase());
+    if (name) names.add(plainName(name));
   };
   if (logRange) {
     const out = gitQuiet(["log", "--no-merges", "--no-show-signature", "--format=%aN%x1f%aE", logRange], { cwd: root });
@@ -558,7 +555,11 @@ function changeAuthors(root, { logRange, worktree }) {
   if (worktree) {
     const e = (gitQuiet(["config", "user.email"], { cwd: root, timeout: 5000 }) || "").trim();
     const n = (gitQuiet(["config", "user.name"], { cwd: root, timeout: 5000 }) || "").trim();
-    add(n, e);
+    // `git log` output is already mailmap-mapped (%aN/%aE); a config identity is not.
+    const mapped = e && gitQuiet(["check-mailmap", `${n || "x"} <${e}>`], { cwd: root, timeout: 5000 });
+    const m = mapped && /^(.*?)\s*<([^>]*)>\s*$/.exec(mapped.trim());
+    if (m) add(m[1], m[2]);
+    else add(n, e);
   }
   return { keys, names: [...names] };
 }
@@ -596,7 +597,8 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
       files: shortList([...new Set([...hits.values()].flat())], 4),
     });
 
-  if (code.length && !files.some((f) => isTestPath(f.path)))
+  const repoHasTests = () => (baseSha ? (gitQuiet(["ls-tree", "-r", "--name-only", baseSha], { cwd: root }) || "").split("\n").some(isTestPath) : false);
+  if (code.length && !files.some((f) => isTestPath(f.path)) && repoHasTests())
     out.items.push({ id: "tests", tag: "verified", via: "file paths", text: `No test file changed alongside ${code.length} source file${code.length === 1 ? "" : "s"}.` });
 
   // ── from history
@@ -626,7 +628,7 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
   for (const rec of raw.split("\x1e").slice(1)) {
     const [head, ...rest] = rec.split("\n");
     const [name, email, date, subject] = head.split("\x1f");
-    const c = { key: (email || "").toLowerCase(), name, day: (date || "").slice(0, 10), subject: subject || "" };
+    const c = { key: (email || "").toLowerCase(), name, day: (date || "").slice(0, 10), at: date || "", subject: subject || "" };
     if (c.day < since) continue; // the git bound is a day early, to dodge time-zone edges
     for (const p of rest) if (p) (hist.get(p) || hist.set(p, []).get(p)).push(c);
   }
@@ -634,13 +636,15 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
   const listFiles = (fs) => shortList(fs.map((f) => f.path), 3);
 
   if (authors.keys.size) {
-    const strangers = existing.filter((f) => !by(f).some((c) => authors.keys.has(c.key)));
-    if (strangers.length && existing.length)
+    // Only files someone else touched in the window: a file nobody touched says nothing about the author.
+    const active = existing.filter((f) => by(f).length);
+    const strangers = active.filter((f) => !by(f).some((c) => authors.keys.has(c.key)));
+    if (strangers.length)
       out.items.push({
         id: "familiarity",
         tag: "verified",
         via: "git history by path; renames before this change aren't followed",
-        text: `${authors.names.length === 1 ? authors.names[0] : "The author"} made no commit to ${strangers.length} of the ${existing.length} existing files changed here between ${since} and the base commit (${baseDay}).`,
+        text: `${authors.names.length === 1 ? authors.names[0] : "The author"} made no commit to ${strangers.length} of the ${active.length} changed files that others committed to between ${since} and the base commit (${baseDay}).`,
         files: listFiles(strangers),
         cmd: `git log --no-merges --since=${since} --format=%aN ${baseSha.slice(0, 10)} -- <file>`,
       });
@@ -671,18 +675,18 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
 
   const fixed = existing
     .map((f) => ({ f, fixes: by(f).filter((c) => c.day >= fixSince && FIX_COMMIT.test(c.subject) && !NOT_A_FIX.test(c.subject)) }))
-    .filter((x) => x.fixes.length >= 2)
+    .filter((x) => new Set(x.fixes.map((c) => c.day)).size >= 2) // repeated over time, not one burst of work
     .sort((a, b) => b.fixes.length - a.fixes.length);
   if (fixed.length) {
     const top = fixed[0];
-    const latest = top.fixes.slice().sort((a, b) => (a.day < b.day ? 1 : -1))[0];
+    const latest = top.fixes.slice().sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))[0];
     out.items.push({
       id: "fixes",
       tag: "author text",
       via: "earlier commit messages",
       text: `${fixed.length === 1 ? "One file has" : `${fixed.length} files have`} had repeated fix-style commits since ${fixSince}: \`${path.basename(top.f.path)}\` has ${top.fixes.length}, the latest on ${latest.day}.`,
       // Shown on the page only: review.txt is read by the agent, and old commit wording isn't something to feed it.
-      quote: redact(latest.subject.slice(0, 80), null),
+      quote: redact(latest.subject, null).slice(0, 80),
       files: shortList(fixed.map((x) => x.f.path)),
       cmd: `git log --no-merges --since=${fixSince} --oneline ${baseSha.slice(0, 10)} -- <file>`,
     });
@@ -1178,11 +1182,12 @@ function renderReviewText(diff) {
       const newRange = `new lines ${span(h.newStart, h.newLines)}`;
       const ranges = f.status === "added" ? newRange : f.status === "deleted" ? oldRange : `${newRange} · ${oldRange}`;
       out.push(`@@ hunk ${i + 1} · ${ranges}${h.header ? ` · ${h.header}` : ""}`);
-      if (h.sec) out.push(`  ⚑ check this for security (${h.sec.side === "old" ? "old " : ""}line ${h.sec.line}): ${h.sec.text.replace(/`/g, "")}`);
       for (const l of h.lines) {
         const o = l.o !== undefined ? String(l.o).padStart(5) : "     ";
         const n = l.n !== undefined ? String(l.n).padStart(5) : "     ";
         out.push(`${o} ${n} │${l.t}${l.s}${l.mv && l.mv[1] !== f.path ? `   ⟵ moved ${l.t === "+" ? "from" : "to"} ${l.mv[1]}:${l.mv[2]}` : ""}`);
+        if (h.sec && (h.sec.side === "old" ? l.t === "-" && l.o === h.sec.line : l.t === "+" && l.n === h.sec.line))
+          out.push(`      ⚑ check this for security (${h.sec.side === "old" ? "old " : ""}line ${h.sec.line}): ${h.sec.text.replace(/`/g, "")}`);
         shown++;
       }
     });

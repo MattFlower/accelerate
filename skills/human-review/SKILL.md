@@ -309,8 +309,8 @@ each `⚑` in `review.txt`:
   breaks and how to fix it. Don't copy the cue's wording.
 - If it's fine, say nothing. Don't annotate to say "this is OK".
 - If the line plainly isn't the code the cue assumes (a string in a data file, a
-  table of patterns), a visible `note` annotation that says what the line *is*
-  is fine. Describe it; don't rule on safety.
+  word list or table of patterns), a visible `note` annotation that says what the
+  line *is* ("A list of path words the signals match on") is fine. Describe it; don't rule on safety.
 - A cue on a file you left out of `keyChanges` still shows in All files. You
   don't need to promote the file.
 - A security issue the scan missed still gets a `risk` annotation or a
@@ -322,8 +322,8 @@ The page shows a short "From git" list under the title, and `review.txt` lists t
 same rows in its header. They're computed by `collect` from git history and file
 paths only, never from the PR title or description or from the commit messages
 under review, so what the author wrote can't steer them. Each row has a tag:
-**verified** (git history or paths; the tooltip has the command that reproduces
-it) or **author text** (counted from git but classified by earlier commit
+**verified** (git history or paths; history rows show the command that reproduces
+them) or **author text** (counted from git but classified by earlier commit
 wording, such as "fix-style commits"). They cover: an author with no earlier
 commits to some of the changed files, files mostly written by someone else, files
 with repeated recent fixes, changes spread across many directories, paths named
@@ -336,7 +336,9 @@ file. A row appears only when it says something, and there is no score.
   from the file's owner. A signal may lift the level by one step above what the
   diff alone suggests (low to medium), but it can't take a small diff to `high`
   by itself. In `risk.why`, mention a signal only to say what it means for this
-  diff or to say you disagree with it; don't just repeat it.
+  diff or to say you disagree with it; don't just repeat it. `risk.why` is held
+  back until the reviewer's pass is done, which is the right place for a
+  disagreement: it's your conclusion.
 - A "path names suggest…" row is a name match only, not a finding about the code.
 - Your own `risk.why` is shown tagged **inference**.
 - Signals are left out, with a note, on a shallow clone or when history can't be
@@ -385,7 +387,9 @@ Rules for visuals:
 
 - **`questions`**: decisions you need from the reviewer about intent or policy,
   phrased so they can answer in a line ("Should public links be able to never
-  expire?"). They're always visible, so don't restate a finding as a question;
+  expire?"). They're always visible, so don't restate a finding as a question
+  or name the mechanism you suspect ("should expired tokens still resolve?" gives
+  away what you found; "what should happen at expiry?" doesn't);
   the finding goes in a held-back `question` or `risk` annotation. The page has
   an **Answer** box for each one.
 - **`checks.verified`**: only what you **actually ran or confirmed in this
@@ -405,7 +409,8 @@ Rules for visuals:
 
 Before you build, go through everything a reviewer will take on trust (every
 annotation, key-change `summary`, concern and file `note`, `focus` why, `ask`
-line, `tests` entry, and `notExamined` entry) and test each one. Drop or fix any
+line, `tests` entry, and `notExamined` entry) and test each one. Run `git`, `grep`, or the code itself
+to check a claim; don't rely on memory of the diff. Drop or fix any
 that fails:
 
 1. **Supported by the diff?** Point to the `review.txt` line that makes it true.
