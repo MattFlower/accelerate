@@ -515,11 +515,11 @@ const HISTORY_TIMEOUT_MS = 20_000;
 const MAX_HISTORY_PATHS = 400;
 const NOT_A_PERSON = /\[bot\]|^(?:dependabot|renovate|github-actions|greenkeeper|snyk)\b/i;
 const FIX_COMMIT = /^(?:fix|bugfix|hotfix)(?:\([^)]*\))?!?:|^revert\b|\b(?:fix(?:e[sd]|ing)?|bug ?fix(?:e[sd])?|hotfix|regressions?|crash(?:es|ed)?)\b/i;
-const NOT_A_FIX = /\b(?:typos?|lint(?:ing)?|format(?:ting)?|prettier|whitespace|spelling|comments?|docs?|readme|changelog|ci|flaky|snapshots?)\b/i;
+const NOT_A_FIX = /\b(?:typos?|lint(?:ing)?|format(?:ting)?|prettier|whitespace|spelling|comments?|docs?|readme|changelog|ci|flaky|snapshots?|tests?)\b/i;
 const NON_CODE_LANG = new Set(["json", "yaml", "markdown", "css", "scss", "less", "xml", "ini", "diff", "dockerfile", "nginx"]);
 const SENSITIVE_WORDS = {
-  "authentication and access": ["auth", "authn", "authz", "authentication", "authorization", "oauth", "login", "logout", "signin", "signup", "session", "sessions", "permission", "permissions", "acl", "rbac", "policy", "policies", "sso", "saml", "jwt"],
-  "secrets and crypto": ["crypto", "secret", "secrets", "credentials", "password", "passwords", "token", "tokens", "keys", "certs", "tls", "ssl", "encryption", "security"],
+  "authentication and access": ["auth", "authn", "authz", "authentication", "authorization", "oauth", "login", "logout", "signin", "signup", "session", "sessions", "permission", "permissions", "acl", "rbac", "sso", "saml", "jwt"],
+  "secrets and crypto": ["crypto", "secret", "secrets", "credentials", "password", "passwords", "token", "tokens", "certs", "tls", "ssl", "encryption", "security"],
   "money": ["billing", "payment", "payments", "invoice", "invoices", "checkout", "subscription", "subscriptions"],
   "data migrations": ["migration", "migrations", "migrate"],
   "build and deploy": ["workflows", "dockerfile", "terraform", "helm", "k8s", "kubernetes", "deploy", "deployment", "iam"],
@@ -531,6 +531,8 @@ function gitQuiet(args, { cwd, timeout = HISTORY_TIMEOUT_MS } = {}) {
   return r.error || r.status !== 0 ? null : r.stdout;
 }
 
+// Names come from git and end up in rendered Markdown: drop anything that could format or link.
+const plainName = (n) => String(n).replace(/[`*_~\[\]()<>|\\]/g, "").trim();
 const isoDay = (d) => d.toISOString().slice(0, 10);
 const shortList = (items, n = 3) => items.slice(0, n);
 
@@ -544,7 +546,7 @@ function changeAuthors(root, { logRange, worktree }) {
     const m = mapped && /^(.*?)\s*<([^>]*)>\s*$/.exec(mapped.trim());
     const [n, e] = m ? [m[1], m[2]] : [name, email];
     keys.add(e.toLowerCase());
-    if (n) names.add(n);
+    if (n) names.add(plainName(n));
   };
   if (logRange) {
     const out = gitQuiet(["log", "--no-merges", "--no-show-signature", "--format=%aN%x1f%aE", logRange], { cwd: root });
@@ -652,7 +654,7 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
         id: "ownership",
         tag: "verified",
         via: "git history by path; renames before this change aren't followed",
-        text: `Most earlier commits to ${owned.length === 1 ? "one file" : `${owned.length} files`} are someone else's: ${shortList(owned).map((o) => `${o.top.name} wrote ${Math.round((o.top.n / o.total) * 100)}% of ${o.total} commits to \`${path.basename(o.f.path)}\``).join("; ")} (since ${since}).`,
+        text: `Most earlier commits to ${owned.length === 1 ? "one file" : `${owned.length} files`} are someone else's: ${shortList(owned).map((o) => `${plainName(o.top.name)} wrote ${Math.round((o.top.n / o.total) * 100)}% of ${o.total} commits to \`${path.basename(o.f.path)}\``).join("; ")} (since ${since}).`,
         files: shortList(owned.map((o) => o.f.path)),
         cmd: `git shortlog -sn --no-merges --since=${since} ${baseSha.slice(0, 10)} -- <file>`,
       });
