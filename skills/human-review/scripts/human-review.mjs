@@ -421,6 +421,83 @@ function suggestConcerns(files) {
   return [...byDir.entries()].map(([dir, paths]) => ({ title: dir === "." ? "Top-level files" : dir, why: "", files: paths }));
 }
 
+// ───────────────────────────────────────────────────────────── security cues
+//
+// A cue is a prompt, not a verdict: "check whether…", phrased as a question and pointing at one
+// line. Braz et al. (ICSE 2022) found that telling reviewers to look for security problems raised
+// detection about 8×, and that a checklist added nothing, so the page shows one specific question
+// on a hunk and nothing like a list. It stays rare: patterns are narrow, at most one cue per
+// hunk, two per file, and SEC_MAX per change. Detection is deterministic and reads only the
+// diff, so nothing in a PR description can steer or silence it.
+const SEC_MAX = 5;
+const SEC_PER_FILE = 2;
+const SEC_SKIP = /\.(md|mdx|markdown|txt|rst|adoc|lock|lockb|sum|svg|snap)$|(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|npm-shrinkwrap\.json|cargo\.lock|gemfile\.lock|poetry\.lock|go\.sum)$/i;
+const COMMENT_LINE = /^\s*(\/\/|#|\*|\/\*|<!--|--\s|;|import\b|from\s+\S+\s+import\b|export\s*(\{|\*)|using\b|use\s|require\b|#include)/;
+const SEC_RULES = [
+  { cat: "injection", rank: 2, re: /(?<![.\w])exec\s*\(|\bchild_process\.exec\s*\(|\bexecSync\s*\(|\beval\s*\(|\bnew Function\s*\(|\bos\.(?:system|popen)\s*\(|dangerouslySetInnerHTML|\.innerHTML\s*=(?!=)|\bdocument\.write\s*\(|\bshell\s*=\s*True/, cue: (id) => `Can anything from outside the program reach \`${id}\`?` },
+  { cat: "sql", rank: 3, re: /\b(?:select\b[^;]*\bfrom|insert\s+into|update\s+\S+\s+set|delete\s+from)\b/i, also: /\$\{|["'`]\s*\+\s*\w|\w\s*\+\s*["'`]|\.format\(|\bf["']|#\{/, id: () => "", cue: () => "Are the values in this query bound as parameters, or built into the string?" },
+  { cat: "deserialization", rank: 4, re: /\b(?:pickle\.loads?|cPickle\.loads?|marshal\.loads?|yaml\.unsafe_load|yaml\.load(?!.*Safe)|unserialize|Marshal\.load|ObjectInputStream|BinaryFormatter|XMLDecoder)\b/, cue: (id) => `Is \`${id}\` ever given data that an outside party controls?` },
+  { cat: "tls", rank: 5, re: /rejectUnauthorized\s*:\s*false|InsecureSkipVerify|\bverify\s*=\s*False|NODE_TLS_REJECT_UNAUTHORIZED/, id: () => "", cue: () => "Why is certificate verification off here, and can this reach production?" },
+  { cat: "weak-hash", rank: 5, re: /createHash\(\s*["'](?:md5|sha1)["']|hashlib\.(?:md5|sha1)\b/, id: () => "", cue: () => "Is a weak hash (MD5 or SHA-1) acceptable for what this one protects?" },
+  { cat: "crypto", rank: 5, re: /\b(?:createHmac|createCipheriv|createDecipheriv|createSign|createVerify|timingSafeEqual|bcrypt|scrypt|argon2|pbkdf2)\b|\bsubtle\.(?:sign|verify|encrypt|decrypt|deriveKey|deriveBits)\b/i, cue: (id) => `Are the algorithm, key source and comparison in \`${id}\` sound?` },
+  { cat: "randomness", rank: 5, re: /\bMath\.random\(\)|\brandom\.random\(\)/, also: /token|secret|nonce|session|password|salt|otp|api[_-]?key/i, cue: (id) => `Is \`${id}\` acceptable for a value that works as a token or secret?` },
+  { cat: "access", rank: 6, re: /\b(?:isAdmin|is_admin|isOwner|is_owner|isSuperuser|is_superuser|hasRole|has_role|hasPermission|has_permission|checkPermission|check_permission|requireRole|requirePermission|permission_required|login_required|canActivate|can[A-Z]\w*)\b/, cue: (id) => `Is \`${id}\` applied on every path that reaches this code, and does it deny by default?` },
+  { cat: "cookie", rank: 7, re: /\b(?:httpOnly|secure|sameSite)\s*[:=]\s*(?:false|["']none["'])/i, cue: () => "Why is this cookie flag relaxed?" },
+  { cat: "auth", rank: 7, re: /\b(?:authenticat\w*|authoris\w*|authoriz\w*|oauth2?|csrf|xsrf|saml|jwt|bearer|isAuthenticated|is_authenticated|requireAuth|require_auth)\b/i, cue: (id) => `Does the handling of \`${id}\` here cover every request that needs it?` },
+];
+// A removed line that mentions one of these is a check that may have gone: worth a look unless
+// the same word still appears on an added line in the hunk.
+const SEC_GUARD = /\b(?:authoriz\w*|authoris\w*|authenticat\w*|isAdmin|hasPermission|has_permission|checkPermission|requireAuth|requireRole|csrf|sanitiz\w*|escapeHtml|escape_html|validat\w*|verifySignature)\b/i;
+
+function secMatch(rule, s) {
+  const m = rule.re.exec(s);
+  if (!m || (rule.also && !rule.also.test(s))) return null;
+  return (rule.id ? rule.id() : m[0].replace(/\s*[(:=].*$/, "")).trim();
+}
+
+function markSecurityCues(files) {
+  const found = [];
+  files.forEach((f, fi) => {
+    if (f.generated || f.mechanical || f.binary || isTestPath(f.path) || SEC_SKIP.test(f.path)) return;
+    f.hunks.forEach((h, hi) => {
+      let best = null;
+      const claim = (rank, cand) => {
+        if (!best || rank < best.rank) best = { rank, ...cand };
+      };
+      const addedText = h.lines.filter((l) => l.t === "+").map((l) => l.s.toLowerCase()).join("\n");
+      for (const l of h.lines) {
+        if (l.t === " " || COMMENT_LINE.test(l.s) || l.s.length > 400) continue;
+        if (l.t === "-") {
+          const m = !l.mv && SEC_GUARD.exec(l.s);
+          if (m && !addedText.includes(m[0].toLowerCase()))
+            claim(1, { cat: "removed-check", side: "old", line: l.o, text: `This hunk removes a check that mentions \`${m[0]}\`. Does an equivalent check still run on this path?` });
+          continue;
+        }
+        for (const rule of SEC_RULES) {
+          if (best && best.rank <= rule.rank) break;
+          const id = secMatch(rule, l.s);
+          if (id !== null) {
+            claim(rule.rank, { cat: rule.cat, side: "new", line: l.n, text: rule.cue(id) });
+            break;
+          }
+        }
+      }
+      if (best) found.push({ fi, hi, best });
+    });
+  });
+  // Keep the strongest few across the whole change; say nothing about the rest.
+  const perFile = new Map();
+  found
+    .sort((a, b) => a.best.rank - b.best.rank || a.fi - b.fi || a.hi - b.hi)
+    .forEach(({ fi, hi, best }, n) => {
+      const used = perFile.get(fi) || 0;
+      if (n >= SEC_MAX || used >= SEC_PER_FILE) return;
+      perFile.set(fi, used + 1);
+      const { rank, ...cue } = best;
+      files[fi].hunks[hi].sec = cue;
+    });
+}
+
 function linguistGenerated(root, paths) {
   if (!paths.length) return new Set();
   const r = spawnSync("git", ["check-attr", "-z", "linguist-generated", "linguist-vendored", "--stdin"], {
@@ -754,6 +831,7 @@ function collect(opts) {
     }
   }
   analyzeMechanical(files); // on the raw text, before redaction can make lines look alike
+  markSecurityCues(files);
   const fileAt = new Map(files.map((f) => [f.path, f]));
   for (const [t, src] of pairTests(files.map((f) => f.path))) fileAt.get(t).testFor = src;
   const redact = makeRedactor();
@@ -894,6 +972,7 @@ function renderReviewText(diff) {
       const newRange = `new lines ${span(h.newStart, h.newLines)}`;
       const ranges = f.status === "added" ? newRange : f.status === "deleted" ? oldRange : `${newRange} · ${oldRange}`;
       out.push(`@@ hunk ${i + 1} · ${ranges}${h.header ? ` · ${h.header}` : ""}`);
+      if (h.sec) out.push(`  ⚑ check this for security (${h.sec.side === "old" ? "old " : ""}line ${h.sec.line}): ${h.sec.text.replace(/`/g, "")}`);
       for (const l of h.lines) {
         const o = l.o !== undefined ? String(l.o).padStart(5) : "     ";
         const n = l.n !== undefined ? String(l.n).padStart(5) : "     ";
@@ -915,12 +994,15 @@ function skeleton(diff) {
     title: diff.pr?.title || "",
     brief: "",
     risk: { level: "", why: "" },
+    ask: [],
     summary: [],
     focus: [],
     sections: [],
     keyChanges: [],
     questions: [],
     checks: { verified: [], manual: [] },
+    tests: { covers: [], doesNotCover: [] },
+    notExamined: [],
     concerns: suggestConcerns(diff.files),
     files,
   };
@@ -938,7 +1020,7 @@ const CALLOUT_KINDS = new Set(["note", "risk", "breaking", "decision", "question
 const SURFACES = new Set(["browser", "desktop", "mobile", "popover", "panel", "bare"]);
 const TEXT_KEYS = new Set(["md", "html", "css", "source", "brief", "intro", "why", "summary", "note", "caption", "text"]);
 // Ids the page itself uses; recap ids must not shadow them.
-const RESERVED_IDS = new Set(["top", "main", "app", "overview", "key-changes", "checks", "files", "hr-data", "hr-title", "hr-top-title"]);
+const RESERVED_IDS = new Set(["top", "main", "app", "overview", "ask", "key-changes", "checks", "wrap-up", "files", "hr-data", "hr-title", "hr-top-title"]);
 const isReservedId = (id) => RESERVED_IDS.has(id) || /^(file-|t\d+-|v-|mmd\d)/.test(id);
 const VALID_ID = /^[A-Za-z][\w-]*$/;
 // Tags the renderer strips together with everything inside them.
@@ -1206,7 +1288,7 @@ function validate(recap, diff, recapDir) {
   };
 
   // Top level
-  const known = new Set(["title", "brief", "risk", "summary", "focus", "sections", "keyChanges", "questions", "checks", "concerns", "files", "$schema"]);
+  const known = new Set(["title", "brief", "risk", "ask", "summary", "focus", "sections", "keyChanges", "questions", "checks", "tests", "notExamined", "concerns", "files", "$schema"]);
   for (const k of Object.keys(recap)) if (!known.has(k)) warn(k, "unknown top-level key (ignored)");
   if (!recap.title || !String(recap.title).trim()) err("title", "required");
   else if (recap.title.length > 70) warn("title", `${recap.title.length} chars — keep it to 70 or fewer`);
@@ -1220,6 +1302,19 @@ function validate(recap, diff, recapDir) {
   if (Array.isArray(recap.summary) && recap.summary.length === 0) warn("summary", "empty — add 2–5 bullets");
   if (Array.isArray(recap.focus) && recap.focus.length === 0 && diff.files.length > 2) warn("focus", "empty — add 3–6 stops, riskiest first");
   if (recap.questions !== undefined && !isStringList(recap.questions)) err("questions", "must be an array of non-empty strings");
+  if (recap.ask !== undefined && !isStringList(recap.ask)) err("ask", "must be an array of non-empty strings");
+  else if (Array.isArray(recap.ask) && recap.ask.length > 3) warn("ask", `${recap.ask.length} lines — keep it to the 1–3 things you most need from the reviewer`);
+  else if (!(recap.ask || []).length && diff.files.length > 2) warn("ask", "empty — say what kind of feedback you want (a decision, a second opinion on one area, a check you could not run)");
+  if (recap.notExamined !== undefined && !isStringList(recap.notExamined)) err("notExamined", "must be an array of non-empty strings");
+  if (recap.tests !== undefined) {
+    const t = recap.tests;
+    if (!t || typeof t !== "object" || Array.isArray(t)) err("tests", "must be an object with `covers` and/or `doesNotCover` arrays");
+    else {
+      for (const k of Object.keys(t)) if (k !== "covers" && k !== "doesNotCover") warn(`tests.${k}`, "unknown key (ignored)");
+      for (const k of ["covers", "doesNotCover"]) if (t[k] !== undefined && !isStringList(t[k])) err(`tests.${k}`, "must be an array of non-empty strings");
+      if (!(t.covers || []).length && !(t.doesNotCover || []).length) warn("tests", "empty — say what the tests cover and what they don't, or that there are none");
+    }
+  } else if (diff.files.length > 2) warn("tests", "missing — say what the tests cover and what they don't (or that there are none)");
   if (recap.checks !== undefined) {
     const c = recap.checks;
     if (!c || typeof c !== "object" || Array.isArray(c)) err("checks", "must be an object with `verified` and/or `manual` arrays");
@@ -1320,7 +1415,8 @@ function validate(recap, diff, recapDir) {
 
   // Built-in sections exist only when they have content.
   const builtIn = new Set(["files"]);
-  if ((recap.summary || []).length || (recap.focus || []).length) builtIn.add("overview");
+  if ((recap.summary || []).length || (recap.focus || []).length || (recap.tests && ((recap.tests.covers || []).length || (recap.tests.doesNotCover || []).length))) builtIn.add("overview");
+  if ((recap.ask || []).length) builtIn.add("ask");
   if ((recap.keyChanges || []).length) builtIn.add("key-changes");
   if ((recap.questions || []).length || (recap.checks?.verified || []).length || (recap.checks?.manual || []).length) builtIn.add("checks");
   if (recap.focus !== undefined) {

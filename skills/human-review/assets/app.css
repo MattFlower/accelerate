@@ -298,6 +298,21 @@ button.linklike:hover { text-decoration: underline; text-underline-offset: 2px; 
 .focus-list .t a:hover { color: var(--link); }
 .focus-list .w { color: var(--ink-2); font-size: 14px; margin-top: 2px; }
 .focus-list .w p { margin: 0; }
+.tests-note { grid-column: 1 / -1; padding-top: 26px; border-top: 1px solid var(--rule); }
+.tests-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 48px; }
+.tests-note h4 { margin: 0 0 8px; font-size: 13.5px; font-weight: 650; color: var(--ink-2); }
+.ask { margin: 22px 0 0; max-width: 70ch; padding: 4px 0 4px 16px; border-left: 3px solid var(--marker); }
+.ask h3 { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
+.ask ul { margin: 0; padding-left: 1.1em; font-size: 15.5px; line-height: 1.5; }
+.ask li { margin-bottom: 6px; padding-left: 2px; }
+.ask li::marker { color: var(--muted); }
+.ask-q { margin-top: 8px; font-size: 13.5px; color: var(--muted); }
+.wrap-up { display: grid; gap: 16px; }
+.wrap-up[hidden] { display: none; }
+.wrap-up .wrap-sub { margin: 0 0 10px; color: var(--muted); font-size: 13.5px; }
+.wrap-up .check-card ul { list-style: disc; padding-left: 1.2em; display: grid; gap: 6px; }
+.wrap-up textarea { width: 100%; min-height: 84px; resize: vertical; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--rule-strong); background: var(--surface); color: var(--ink); font: 14px/1.5 var(--sans); }
+.wrap-up textarea:focus { outline: 2px solid var(--focus); outline-offset: -1px; border-color: transparent; }
 .focus-list .r { margin-top: 5px; font-size: 12px; }
 
 /* ───────────────────────────── generic block chrome */
@@ -456,6 +471,7 @@ table.code tr.note-row td { padding: 0; background: var(--surface); }
 .note .nk .ln { font-family: var(--mono); font-weight: 500; color: var(--muted); }
 .note p { margin: 0; }
 .note p + p { margin-top: 6px; }
+.note.k-cue { --k: var(--ink-2); --kw: var(--sunken); --k-ink: var(--ink); }
 .note.k-risk { --k: var(--risk); --kw: var(--risk-wash); --k-ink: var(--risk); }
 .note.k-question { --k: var(--question); --kw: var(--question-wash); --k-ink: var(--question); }
 .note.k-decision { --k: var(--decision); --kw: var(--decision-wash); --k-ink: var(--decision); }
@@ -692,6 +708,8 @@ table.code .noeol { margin-left: 8px; padding: 0 5px; border: 1px solid var(--ru
 .prio.skim { color: var(--ink-2); }
 .prio.mechanical, .prio.generated { border-style: dashed; }
 .chip.test { background: transparent; color: var(--muted); font-weight: 500; }
+.chip.sec { background: transparent; color: var(--ink-2); font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+.chip.sec svg.i { width: 11px; height: 11px; }
 
 /* ───────────────────────────── feedback drawer */
 

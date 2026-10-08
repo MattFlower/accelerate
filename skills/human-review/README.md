@@ -6,6 +6,9 @@ single HTML page that a person can review in a few minutes.
 The page leads with the shape of the change, then drops into the code:
 
 - **Title, brief, and risk read**: what changed, for whom, and whether to worry.
+- **What I need from you**: the kind of feedback the author wants (a decision,
+  a second opinion on one area, a check that couldn't be run), right under the
+  brief, plus what the tests cover and what they don't.
 - **Footprint bar**: where the weight of the change sits, concern by concern,
   and how much of it is mechanical or generated, so you know at a glance how
   much actually needs reading.
@@ -16,7 +19,12 @@ The page leads with the shape of the change, then drops into the code:
   changes, API cards with example payloads, and Mermaid or hand-laid diagrams.
 - **Key changes**: annotated diffs of the files that carry the change, with
   margin notes colored by kind (risk, question, decision, note), split or
-  unified views, word-level highlights, and expandable context.
+  unified views, word-level highlights, and expandable context. Where a hunk
+  touches access control, authentication, SQL built from strings,
+  deserialization, crypto, or a shell call, the page asks one specific
+  question at that line ("Is `canShare` applied on every path that reaches
+  this code?"). These are computed from the diff, rare (five at most), and
+  never a checklist.
 - **Before you approve**: the agent's open questions (answer them inline),
   what it actually verified, and a checklist of things to try yourself.
 - **All files, by concern**: every changed file grouped by what it does
@@ -27,8 +35,10 @@ The page leads with the shape of the change, then drops into the code:
   lines are dimmed in diffs and labeled with where they came from.
 - **Your read first**: the agent's conclusions (its risk read, the lines it
   flagged, risk callouts) are held back until you've viewed each file, so they
-  don't steer where you look. One click shows them all. The feedback export
-  notes which comments you wrote before seeing them.
+  don't steer where you look. One click shows them all. When you've viewed
+  every file they open, together with what the agent did *not* examine and an
+  "Anything else?" box for what the page didn't make you look at. The feedback
+  export notes which comments you wrote before seeing them.
 
 You can comment on any line or block, pick a verdict, and press **Copy
 feedback for the agent**. You get Markdown with file:line anchors that you

@@ -125,7 +125,7 @@
     email: "mail", password: "lock", add: "plus", close: "x", more: "dots", chevron: "chevronDown", caret: "chevronDown",
     dropdown: "chevronDown", delete: "trash", gear: "settings", avatar: "user", person: "user", notification: "bell",
     pencil: "edit", back: "arrowLeft", next: "arrowRight", warning: "alert", ai: "sparkles", magic: "sparkles", photo: "image",
-    team: "users", time: "clock", web: "globe", external: "externalLink",
+    team: "users", time: "clock", web: "globe", external: "externalLink", cue: "lock",
   };
   function icon(name, cls = "i") {
     const d = ICONS[ICON_ALIASES[name] || name] || ICONS.info;
@@ -239,7 +239,7 @@
   // Tied to the code under review, not to the recap's wording: rebuilding after a recap-only
   // edit keeps the reviewer's comments.
   const KEY = `hr:${hash([diff.repo, diff.base.sha, diff.head.sha, diff.fingerprint].join("|"))}`;
-  const state = Object.assign({ comments: [], viewed: {}, checks: {}, verdict: null, general: "" }, store.get(KEY, {}));
+  const state = Object.assign({ comments: [], viewed: {}, checks: {}, verdict: null, general: "", more: "" }, store.get(KEY, {}));
   // Which agent findings the reviewer has chosen to see (see "agent findings" below).
   state.revealed = Object.assign({ all: false, files: {}, blocks: {} }, state.revealed || {});
   const save = () => {
@@ -325,7 +325,7 @@
   // viewed that file, or chooses to see them all. Explanatory notes stay visible.
   const FINDING_NOTES = new Set(["risk", "question", "praise"]);
   const FINDING_CALLOUTS = new Set(["risk", "security", "question"]);
-  const holdFindings = () => prefs.findings !== "always" && !state.revealed.all;
+  const holdFindings = () => prefs.findings !== "always" && !state.revealed.all && reviewable.length > 0;
   const fileFindingsHidden = (p) => holdFindings() && !state.revealed.files[p];
   const blockFindingHidden = (id) => holdFindings() && !state.revealed.blocks[id];
   const findingWatchers = new Set(); // redraw functions for held-back placeholders
@@ -349,6 +349,7 @@
     rerenderAllDiffs();
     notifyFindings();
   }
+  const listOf = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()) : []);
   const RISK_KEY = "__risk"; // block ids start with a letter, so this can't collide
   // All findings, or with `stillHeld` only those not yet revealed.
   const countFindings = (stillHeld = false) => {
@@ -363,6 +364,8 @@
     };
     walk(recap.sections);
     walk(recap.keyChanges);
+    // What the agent didn't examine opens with the rest, when the pass is done.
+    if (listOf(recap.notExamined).length && (!stillHeld || holdFindings())) n++;
     return n;
   };
 
@@ -526,7 +529,7 @@
 
   function noteEl(kind, body, { label, lineLabel, you, acts, side } = {}) {
     const k = you ? "you" : kind || "note";
-    const names = { note: "Note", risk: "Risk", question: "Question", decision: "Decision", praise: "Nice", you: "Your comment" };
+    const names = { cue: "Check this for security", note: "Note", risk: "Risk", question: "Question", decision: "Decision", praise: "Nice", you: "Your comment" };
     return h(
       "div",
       { class: `note ${you ? "you" : `k-${k}`}${side ? ` side-${side}` : ""}` },
@@ -708,7 +711,15 @@
     const allHunks = file.hunks.map((hk, i) => ({ ...hk, index: i }));
     const hunks = inst.showAll ? allHunks : hunksFor(file, blk);
     const { rows, lines } = rowModel(file, hunks, allHunks);
-    const { notes, marked } = index;
+    const { marked } = index;
+    // Security cues come from the CLI's pattern scan, not the agent, so they are always visible.
+    const notes = new Map([...index.notes].map(([k, v]) => [k, v.slice()]));
+    for (const hk of hunks) {
+      if (!hk.sec) continue;
+      const key = `${hk.sec.side === "old" ? "o" : "n"}${hk.sec.line}`;
+      if (!notes.has(key)) notes.set(key, []);
+      notes.get(key).unshift({ kind: "cue", line: hk.sec.line, text: hk.sec.text });
+    }
     const lang = file.language;
 
     const single = file.status === "added" ? "new" : file.status === "deleted" ? "old" : null;
@@ -1100,6 +1111,7 @@
   }
 
   function setViewed(p, v) {
+    const wasHeld = holdFindings();
     if (v) {
       state.viewed[p] = true;
       state.revealed.files[p] = true; // reviewed it: now compare with what the agent found
@@ -1109,6 +1121,7 @@
     save();
     notifyFindings();
     if (state.revealed.all) rerenderAllDiffs();
+    if (wasHeld && !holdFindings()) toast("Every file viewed: the agent's findings are open. “Anything else?” is at the end of the page.");
     for (const inst of liveDiffs) if (inst.file.path === p) refresh(inst);
     for (const box of document.querySelectorAll(`[data-viewed="${CSS.escape(p)}"]`)) box.checked = v;
     for (const row of document.querySelectorAll(`.frow[data-path="${CSS.escape(p)}"]`)) row.classList.toggle("is-viewed", v);
@@ -1999,6 +2012,19 @@ ul, ol { margin: 0; padding-left: 18px; }
     h1.append(md(recap.title || "Untitled review", { inline: true }));
     hero.append(crumbs, h1);
     if (recap.brief) hero.append(h("div", { class: "lede" }, md(recap.brief, { inline: true })));
+    const ask = listOf(recap.ask);
+    if (ask.length) {
+      const nq = listOf(recap.questions).length;
+      hero.append(
+        h(
+          "div",
+          { class: "ask", id: "ask" },
+          h("h3", null, "What I need from you"),
+          h("ul", null, ask.map((a) => h("li", null, md(a, { inline: true })))),
+          nq ? h("div", { class: "ask-q" }, h("a", { href: "#", dataset: { ref: "#checks" } }, plural(nq, "question")), " to answer under “Before you approve”") : null,
+        ),
+      );
+    }
     hero.append(commitList);
 
     // Footprint: where the weight of the change sits
@@ -2056,7 +2082,7 @@ ul, ol { margin: 0; padding-left: 18px; }
               "div",
               null,
               h("strong", null, "Your read first. "),
-              `The agent's ${plural(held, "finding")} (its risk read, the lines it flagged, and its risk callouts) ${held === 1 ? "is" : "are"} held back so ${held === 1 ? "it doesn't" : "they don't"} steer where you look. Each file's findings appear when you mark it Viewed.`,
+              `The agent's ${plural(held, "finding")} (its risk read, the lines it flagged, its risk callouts, and what it didn't examine) ${held === 1 ? "is" : "are"} held back so ${held === 1 ? "it doesn't" : "they don't"} steer where you look. A file's notes appear when you mark it Viewed; the rest open once you've viewed every file.`,
               h(
                 "div",
                 { class: "held-actions" },
@@ -2090,7 +2116,9 @@ ul, ol { margin: 0; padding-left: 18px; }
   function renderOverview() {
     const summary = recap.summary || [];
     const focus = recap.focus || [];
-    if (!summary.length && !focus.length) return null;
+    const covers = listOf(recap.tests && recap.tests.covers);
+    const leaves = listOf(recap.tests && recap.tests.doesNotCover);
+    if (!summary.length && !focus.length && !covers.length && !leaves.length) return null;
     sectionsForToc.push({ id: "overview", title: "Overview" });
     const el = h("section", { class: "overview", id: "overview" });
     if (summary.length) el.append(h("div", null, h("h3", null, "What changed"), h("ul", { class: "summary-list prose" }, summary.map((s) => h("li", null, md(s, { inline: true }))))));
@@ -2117,7 +2145,49 @@ ul, ol { margin: 0; padding-left: 18px; }
         ),
       );
     }
+    if (covers.length || leaves.length) {
+      const col = (title, items) =>
+        items.length ? h("div", null, h("h4", null, title), h("ul", { class: "summary-list prose" }, items.map((s) => h("li", null, md(s, { inline: true }))))) : null;
+      el.append(h("div", { class: "tests-note" }, h("h3", null, "Tests"), h("div", { class: "tests-cols" }, col("What they cover", covers), col("What they don't", leaves))));
+    }
     return el;
+  }
+
+  // The end of the reviewer's pass: what the agent left unexamined, and a prompt for anything
+  // the page didn't make them look at. Hidden while findings are held back.
+  function renderWrapUp() {
+    const left = listOf(recap.notExamined);
+    const sec = h("section", { class: "sec wrap-up", id: "wrap-up" });
+    sec.append(h("header", null, h("h2", null, "Before you sign off")));
+    if (left.length)
+      sec.append(
+        h(
+          "div",
+          { class: "check-card" },
+          h("h3", null, icon("eye"), "What the agent did not examine"),
+          h("p", { class: "wrap-sub" }, "Nobody has looked at these yet, the agent included."),
+          h("ul", null, left.map((t) => h("li", null, md(t, { inline: true })))),
+        ),
+      );
+    const ta = h("textarea", { id: "hr-more", placeholder: "Something you wanted to check that nothing here pointed you to, or a worry that doesn't fit on a line…", "aria-label": "Anything else?" });
+    ta.value = state.more || "";
+    ta.addEventListener("input", () => {
+      state.more = ta.value;
+      save();
+    });
+    sec.append(
+      h(
+        "div",
+        { class: "check-card" },
+        h("h3", null, icon("comment"), "Anything else?"),
+        h("p", { class: "wrap-sub" }, "Is there something about this change that nothing on this page made you look at? It goes into your feedback."),
+        ta,
+      ),
+    );
+    const draw = () => (sec.hidden = holdFindings());
+    findingWatchers.add(draw);
+    draw();
+    return sec;
   }
 
   function sectionShell(id, title, aside) {
@@ -2337,6 +2407,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         " ",
         f.status !== "modified" ? h("span", { class: `chip ${f.status}`, style: { marginLeft: "4px" } }, f.status) : null,
         f.testFor ? h("span", { class: "chip test", style: { marginLeft: "4px" }, title: `Tests ${f.testFor}` }, `tests ${splitPath(f.testFor)[1]}`) : null,
+        f.hunks.some((x) => x.sec) ? h("span", { class: "chip sec", style: { marginLeft: "4px" }, title: "A pattern in this file raises a security question" }, icon("lock"), "security question") : null,
         m.note ? h("span", { class: "fn" }, md(m.note, { inline: true })) : null,
         m.proof ? h("span", { class: "fproof" }, icon("check"), md(m.proof, { inline: true })) : null,
       ),
@@ -2811,6 +2882,9 @@ ul, ol { margin: 0; padding-left: 18px; }
     if (state.general && state.general.trim()) {
       L.push("", "## Overall", "", state.general.trim());
     }
+    if (state.more && state.more.trim()) {
+      L.push("", "## Anything the page did not make me look at", "", state.more.trim());
+    }
     const answers = state.comments.filter((c) => c.anchor.type === "question");
     if (answers.length) {
       L.push("", "## Answers to your questions", "");
@@ -2837,7 +2911,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         L.push("");
       });
     }
-    if (!rest.length && !answers.length && !(state.general || "").trim()) L.push("", "_No comments._");
+    if (!rest.length && !answers.length && !(state.general || "").trim() && !(state.more || "").trim()) L.push("", "_No comments._");
     return L.join("\n").replace(/\n{3,}/g, "\n\n") + "\n";
   }
   function toast(msg) {
@@ -2887,6 +2961,7 @@ ul, ol { margin: 0; padding-left: 18px; }
     const ch = renderChecks();
     if (ch) inner.append(ch);
     inner.append(renderFiles());
+    inner.append(renderWrapUp());
     inner.append(
       h(
         "footer",

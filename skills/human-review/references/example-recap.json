@@ -5,6 +5,10 @@
     "level": "medium",
     "why": "Adds the first unauthenticated route (`GET /s/:token`). The *Never* expiry option can't actually be chosen, and expired links keep a board marked as shared."
   },
+  "ask": [
+    "Decide whether public links may be created without an expiry.",
+    "Look closely at `GET /s/:token`: it is the first route that skips the session check."
+  ],
   "summary": [
     "New `share_links` table (hashed tokens, expiry, soft revoke) and a `projects.visibility` column.",
     "Three routes: create and revoke links (owners only), plus a public `GET /s/:token` that returns the board read-only.",
@@ -488,6 +492,20 @@
       "Revoke the last link and confirm the *Shared by link* pill disappears."
     ]
   },
+  "tests": {
+    "covers": [
+      "Token hashing, lookup, expiry, and revocation in `tests/shareLinks.test.ts`.",
+      "The `canShare` role check in `tests/permissions.test.ts`."
+    ],
+    "doesNotCover": [
+      "The HTTP routes: the tests call `shareLinks.ts` and `permissions.ts` directly.",
+      "The popover and header components."
+    ]
+  },
+  "notExamined": [
+    "Did not run the migration against a populated database.",
+    "Did not open the popover in a browser; its layout is inferred from the component code."
+  ],
   "files": {
     "README.md": {
       "review": "skim",

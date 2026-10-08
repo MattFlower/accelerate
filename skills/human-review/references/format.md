@@ -19,7 +19,7 @@ Conventions:
   using only letters, digits, `-` and `_`. Give one to blocks you reference
   from `focus` (`"ref": "#schema"`). The others get ids derived from their
   content. The page reserves `top`, `main`, `app`, `overview`, `key-changes`,
-  `checks`, `files`, `hr-data`, `hr-title`, and `hr-top-title`, and ids
+  `ask`, `checks`, `wrap-up`, `files`, `hr-data`, `hr-title`, and `hr-top-title`, and ids
   starting with `file-`, `v-`, `mmd` plus a digit, or `t` plus digits and `-`.
 - The page loads nothing from the network: its Content-Security-Policy blocks
   remote images, fonts, and stylesheets. Show screenshots with `screenshot`
@@ -34,6 +34,7 @@ Conventions:
   "title": "Read-only share links for project boards",   // required, ≤ 70 chars
   "brief": "Owners can now create a public, read-only link…",  // 1–3 sentences
   "risk": { "level": "medium", "why": "Adds the first unauthenticated route…" },
+  "ask": ["Decide whether *Never expires* should exist.", "Second opinion on how the token is hashed."],  // 1–3 lines: what you need
   "summary": ["New `share_links` table…", "Three routes…"],   // 2–5 bullets
   "focus": [                                               // reading order, 3–6 stops
     { "title": "The public route", "why": "First endpoint with no session…", "ref": "src/server/routes.ts:49" },
@@ -46,6 +47,11 @@ Conventions:
     "verified": [{ "text": "Unit tests pass", "cmd": "npm test" }, "Migration applies on a seed DB"],
     "manual": ["Create a link with **Never** and check its expiry."]
   },
+  "tests": {                                              // facts about the tests in this change
+    "covers": ["Create, list, and revoke a link through the real handlers."],
+    "doesNotCover": ["No test sends an expired token."]
+  },
+  "notExamined": ["Did not run the migration against a populated database."],  // held back until the pass is done
   "concerns": [                                           // every file, grouped by what it does, in reading order
     { "title": "Token storage and lookup", "why": "How a link is created, hashed, resolved, and revoked.",
       "files": ["src/db/migrations/002_share_links.sql", "src/server/shareLinks.ts", "tests/shareLinks.test.ts"] },
@@ -62,7 +68,10 @@ Conventions:
 | Field | Notes |
 | --- | --- |
 | `risk.level` | `"low"`, `"medium"`, or `"high"` |
-| `focus[].ref` | `"path:line"`, `"path:start-end"`, `"path"`, or `"#block-or-section-id"`. Built-in section ids: `overview`, `key-changes`, `checks`, `files`. A custom section's id is its slugified title unless you set `id`. |
+| `ask[]` | Up to three short lines on the kind of feedback wanted, shown under the brief as "What I need from you". Visible from the start, so describe what you want; don't state a finding. |
+| `tests` | `covers` and `doesNotCover`, each a list of strings. Facts about the tests in this change, shown in the overview. Visible from the start. |
+| `notExamined[]` | What the agent did not look at or could not run. **Held back**: it opens with the other findings once every file is viewed (or on "Show all"), under "Before you sign off", beside an "Anything else?" box whose text goes into the feedback. |
+| `focus[].ref` | `"path:line"`, `"path:start-end"`, `"path"`, or `"#block-or-section-id"`. Built-in section ids: `overview`, `ask`, `key-changes`, `checks`, `files`. A custom section's id is its slugified title unless you set `id`. |
 | `sections[]` | Rendered in order between the overview and key changes. Each needs a `title` and `blocks`; `id` and `intro` are optional. |
 | `keyChanges[]` | `diff` blocks (the `type` can be omitted) or `code` blocks. Rendered as tabs, in order. |
 | `concerns[]` | `title` (required), `why` (one line, markdown), and `files` in reading order: interfaces and schema before the code that uses them, each test right after the code it tests. Every file belongs to at most one concern. Concerns drive the All files section, the sidebar, and the footprint bar, and each gets an id `c-<slugified title>` usable in focus refs. Files in no concern are listed under "Other changes" (the build warns). Leave mechanical and generated files out; they get their own groups. |

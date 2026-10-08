@@ -70,7 +70,11 @@ Update it rather than starting over.
 Read all of `review.txt` (in chunks if it's long). Generated files and
 mechanical ones (renamed with identical contents, or only moved or re-indented
 lines) are summarized with their proof instead of printed, and a line that only
-moved is marked `⟵ moved from <file>:<line>`. Open surrounding source when a hunk doesn't make sense
+moved is marked `⟵ moved from <file>:<line>`. A hunk that touches access control,
+authentication, SQL, deserialization, crypto, or a shell or `eval` call may carry
+a line like `⚑ check this for security (line 42): …`. The page shows the same
+question to the reviewer at that line. Look at the spot yourself (see "Security
+cues" below). Open surrounding source when a hunk doesn't make sense
 on its own: callers, types, the rest of a component. Read the commit messages
 and the PR description (`--pr` includes it in `diff.json`).
 
@@ -98,6 +102,8 @@ feature (UI, schema, API, permissions). Skim it once to calibrate the tone and
 density.
 
 What to write, and how, is covered in "Writing for a reviewer" below.
+
+When the draft is done, do the **precision check** (below) before you build.
 
 ### 5. Build and open
 
@@ -149,8 +155,10 @@ answer each one only once:
 4. **Show me the code that matters.** Covered by `keyChanges` (annotated diffs),
    `concerns` (every file, grouped by what it does), and `files` (triage).
 
-Then `questions` and `checks` close the loop: what you need from them, what you
-already verified, and what they should try themselves.
+`ask` and `tests` sit near the top: what you need from the reviewer, and what the
+tests do and don't cover. `questions` and `checks` close the loop: what you need
+answered, what you already verified, and what they should try themselves.
+`notExamined` is what you didn't look at.
 
 **The reviewer reads before they see your conclusions.** Research on
 AI-assisted review found that showing an AI's conclusions first makes reviewers
@@ -158,12 +166,15 @@ fixate on what it flagged and miss the rest. So the page holds back your
 *findings* until the reviewer has viewed that file or asks to see them:
 
 - **Held back:** `risk` (the level *and* its `why`); `risk`, `question`, and
-  `praise` annotations; `risk`, `security`, and `question` callouts.
-- **Always visible:** everything else: `title`, `brief`, `summary`, `focus`,
-  sections (wireframes, diagrams, captions, API and states notes), `note`,
-  `decision`, `breaking`, and `perf` callouts, `note` and `decision`
-  annotations, key-change summaries, concern and file notes, `questions`, and
-  `checks`.
+  `praise` annotations; `risk`, `security`, and `question` callouts; and
+  `notExamined`, which opens only when every file has been viewed (or on "Show
+  all").
+- **Always visible:** everything else: `title`, `brief`, `ask`, `summary`,
+  `focus`, `tests`, sections (wireframes, diagrams, captions, API and states
+  notes), `note`, `decision`, `breaking`, and `perf` callouts, `note` and
+  `decision` annotations, key-change summaries, concern and file notes,
+  `questions`, `checks`, and the CLI's security cues (a fixed question computed
+  from the diff, not your opinion).
 
 Write the visible parts **descriptively**: what changed, how it works, where to
 look. Put what you *concluded* (bugs, sharp edges, doubts) only in the held-back
@@ -184,6 +195,12 @@ and Never" doesn't.
   you found a real bug, say so here.
 - **`summary`**: two to five bullets of *what changed*, each one a fact a
   reviewer would otherwise have to dig out. No "this PR…" throat-clearing.
+- **`ask`**: one to three lines on the *kind of feedback you want*, shown under
+  the brief as "What I need from you". Name a decision ("Decide whether public
+  links may never expire"), a second opinion on one area ("Check the lock order in
+  `queue.ts`; I couldn't test it under load"), or the depth that fits ("A skim
+  is enough: a rename plus tests"). Describe what you want; don't state what you
+  found. Anything that needs a written answer also goes in `questions`.
 - **`focus`**: the suggested reading order, three to six stops. Each stop is a
   short title, a why ("check how…", "this is where…"), and a `ref` to
   `path:line` or `#block-id`. This is the most valuable thing on the page. Put
@@ -225,6 +242,18 @@ and Never" doesn't.
   `skim` if it matters (a lockfile bump that pulls in a new major version), but
   you can't mark anything as needing less attention than `skim`. Accurate
   triage is how a 40-file PR becomes a 6-file read, without hiding real code.
+- **`tests`**: `covers` and `doesNotCover`, each a short list of facts a reviewer
+  can check against the test files: "Tests create, list, and revoke a link
+  through the real handlers" and "No test sends an expired token". These are
+  always visible, so keep them to what the tests do. A behavior the change adds
+  that no test exercises belongs in `doesNotCover` only as a plain fact. A bug
+  you suspect belongs in a `risk` annotation. If there are no tests, write
+  `"doesNotCover": ["No tests were added or changed"]`.
+- **`notExamined`**: what you did not look at or could not run: callers outside
+  the diff, a migration on real data, behavior under load, the UI in a browser.
+  Be concrete. The page shows it only after the reviewer's pass, under "Before
+  you sign off", next to an "Anything else?" box. Leave it empty only if you
+  really looked at everything the change touches.
 
 ### Annotations
 
@@ -250,6 +279,22 @@ legible.
   numbered from the OLD column of `review.txt`.
 - Line numbers come from `review.txt`. The build rejects any line that isn't in
   the diff and tells you which ranges are valid.
+
+### Security cues
+
+When a hunk's added lines touch access control, authentication, SQL built from
+strings, deserialization, crypto, or a shell or `eval` call (or a removed line
+mentions a check), `collect` marks one line in it and the page asks one specific
+question there: "Is `canShare` applied on every path that reaches this code?"
+Cues are rare (at most five per change, one per hunk) and fixed. You can't edit
+or silence them, and the PR text can't either. For each `⚑` in `review.txt`:
+
+- Read the code around it and answer the question for yourself.
+- If you find a real problem, add a `risk` annotation on that line saying what
+  breaks and how to fix it. Don't copy the cue's wording.
+- If it's fine, say nothing. Don't annotate to say "this is OK".
+- A security issue the scan missed still gets a `risk` annotation or a
+  `security` callout (both held back).
 
 ### Key changes
 
@@ -307,6 +352,27 @@ Rules for visuals:
   as steps that don't give away what you expect them to find. The reviewer can
   tick them off.
 
+### Precision check
+
+Before you build, go through everything a reviewer will take on trust (every
+annotation, key-change `summary`, concern and file `note`, `focus` why, `ask`
+line, `tests` entry, and `notExamined` entry) and test each one. Drop or fix any
+that fails:
+
+1. **Supported by the diff?** Point to the `review.txt` line that makes it true.
+   If it depends on code outside the diff, read that code and show it in a `code`
+   block, or drop the claim. In one production study, about one in five
+   AI review comments made claims the diff didn't support.
+2. **Actionable?** It must tell the reviewer what to check or decide, or explain
+   a *why* the code can't show. Otherwise drop it.
+3. **More than the code says?** If it paraphrases the line, drop it.
+4. **The right kind?** A conclusion (a bug, a doubt, "this looks wrong") belongs
+   in a held-back kind. Reword anything visible that gives a verdict away.
+5. **Worth the reviewer's trust?** One wrong or noisy note makes them discount
+   the rest. Silence beats a weak note, and a file with no annotations is fine.
+
+Then run `build --check`.
+
 ### Honesty
 
 The page will be trusted. A confidently wrong recap is worse than none, because
@@ -325,7 +391,9 @@ the reviewer skips the line you summarized incorrectly.
 
 The reviewer's **Copy feedback for the agent** button produces Markdown that
 starts with `# Review feedback:`. It contains the verdict, an overall note,
-answers to your questions, and comments anchored to `path:line` (with the code
+anything the reviewer says the page didn't make them look at (treat that as a
+gap in your review: look there, and add it to `notExamined` or the annotations if
+it belongs), answers to your questions, and comments anchored to `path:line` (with the code
 line quoted) or to a named block. When the user pastes it:
 
 1. Treat it as review comments from the user and address each one: fix the
