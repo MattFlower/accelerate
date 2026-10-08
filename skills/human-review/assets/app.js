@@ -349,13 +349,16 @@
     rerenderAllDiffs();
     notifyFindings();
   }
-  const countFindings = () => {
-    let n = recap.risk && recap.risk.level ? 1 : 0;
+  const RISK_KEY = "__risk"; // block ids start with a letter, so this can't collide
+  // All findings, or with `stillHeld` only those not yet revealed.
+  const countFindings = (stillHeld = false) => {
+    let n = recap.risk && recap.risk.level && (!stillHeld || blockFindingHidden(RISK_KEY)) ? 1 : 0;
     const walk = (x) => {
       if (Array.isArray(x)) return x.forEach(walk);
       if (!x || typeof x !== "object") return;
-      if (x.type === "callout" && FINDING_CALLOUTS.has(x.kind)) n++;
-      if (Array.isArray(x.annotations) && (x.type === "diff" || x.type === "code" || !x.type)) n += x.annotations.filter((a) => FINDING_NOTES.has(a.kind)).length;
+      if (x.type === "callout" && FINDING_CALLOUTS.has(x.kind) && (!stillHeld || blockFindingHidden(x.id))) n++;
+      if (Array.isArray(x.annotations) && (x.type === "diff" || x.type === "code" || !x.type) && (!stillHeld || fileFindingsHidden(x.file)))
+        n += x.annotations.filter((a) => FINDING_NOTES.has(a.kind)).length;
       for (const v of Object.values(x)) if (v && typeof v === "object") walk(v);
     };
     walk(recap.sections);
@@ -663,6 +666,7 @@
 
   function drawDiff(inst, headless) {
     const { file, blk } = inst;
+    const index = annotationIndex(blk, fileFindingsHidden(file.path));
     const el = inst.el;
     el.textContent = "";
     el.classList.toggle("nowrap", !prefs.wrap);
@@ -689,8 +693,7 @@
         ),
       );
       if (blk.summary) el.append(h("div", { class: "diff-summary" }, md(blk.summary, { cls: "" })));
-      const held = annotationIndex(blk, fileFindingsHidden(file.path)).held;
-      if (held) el.append(heldBanner(held, () => revealFile(file.path)));
+      if (index.held) el.append(heldBanner(index.held, () => revealFile(file.path)));
     }
 
     if (file.binary) {
@@ -705,7 +708,7 @@
     const allHunks = file.hunks.map((hk, i) => ({ ...hk, index: i }));
     const hunks = inst.showAll ? allHunks : hunksFor(file, blk);
     const { rows, lines } = rowModel(file, hunks, allHunks);
-    const { notes, marked } = annotationIndex(blk, fileFindingsHidden(file.path));
+    const { notes, marked } = index;
     const lang = file.language;
 
     const single = file.status === "added" ? "new" : file.status === "deleted" ? "old" : null;
@@ -1100,9 +1103,12 @@
     if (v) {
       state.viewed[p] = true;
       state.revealed.files[p] = true; // reviewed it: now compare with what the agent found
+      // Every file read: the reviewer's own pass is done, so the rest (risk read, callouts) opens too.
+      if (reviewable.every((f) => state.viewed[f.path])) state.revealed.all = true;
     } else delete state.viewed[p];
     save();
     notifyFindings();
+    if (state.revealed.all) rerenderAllDiffs();
     for (const inst of liveDiffs) if (inst.file.path === p) refresh(inst);
     for (const box of document.querySelectorAll(`[data-viewed="${CSS.escape(p)}"]`)) box.checked = v;
     for (const row of document.querySelectorAll(`.frow[data-path="${CSS.escape(p)}"]`)) row.classList.toggle("is-viewed", v);
@@ -2027,8 +2033,8 @@ ul, ol { margin: 0; padding-left: 18px; }
       const slot = h("div");
       const draw = () =>
         slot.replaceChildren(
-          blockFindingHidden("risk")
-            ? h("div", { class: "risk held-risk" }, h("span", { class: "level" }, "Agent's risk read"), h("span", null, "Held back until you've formed your own. ", h("button", { type: "button", class: "linklike", onclick: () => revealBlock("risk") }, "Show it")))
+          blockFindingHidden(RISK_KEY)
+            ? h("div", { class: "risk held-risk" }, h("span", { class: "level" }, "Agent's risk read"), h("span", null, "Held back until you've formed your own. ", h("button", { type: "button", class: "linklike", onclick: () => revealBlock(RISK_KEY) }, "Show it")))
             : h("div", { class: `risk ${lv}` }, h("span", { class: "level" }, `${lv[0].toUpperCase()}${lv.slice(1)} risk`), recap.risk.why ? md(recap.risk.why, { inline: true }) : null),
         );
       findingWatchers.add(draw);
@@ -2036,11 +2042,11 @@ ul, ol { margin: 0; padding-left: 18px; }
       facts.append(slot);
     }
     hero.append(facts);
-    const held = countFindings();
-    if (held) {
+    if (countFindings()) {
       const notice = h("div");
       const draw = () => {
-        if (!holdFindings()) return notice.replaceChildren();
+        const held = countFindings(true);
+        if (!holdFindings() || !held) return notice.replaceChildren();
         notice.replaceChildren(
           h(
             "div",

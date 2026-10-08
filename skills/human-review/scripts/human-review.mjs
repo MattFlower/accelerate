@@ -266,7 +266,8 @@ const hasIdentity = (s) =>
 // `mv: [kind, partnerPath, partnerLine]`. Must run before redaction.
 function analyzeMechanical(files) {
   const entries = [];
-  for (const f of files)
+  // Generated files (lockfiles, snapshots, build output) are never evidence that code moved.
+  for (const f of files.filter((x) => !x.generated))
     f.hunks.forEach((h, hi) => {
       for (const l of h.lines) {
         if (l.t === " ") continue;
@@ -282,19 +283,34 @@ function analyzeMechanical(files) {
     a.l.mv = [kind, b.f.path, lineNo(b)];
     b.l.mv = [kind, a.f.path, lineNo(a)];
   };
-  // Pair unpaired entries that share a pool key, in order. `ok` can veto a candidate partner.
-  const pairBy = (keyOf, ok = () => true) => {
+  // Pair unpaired entries that share a pool key, in order. `allowed(a)` may return the set of
+  // files a removed line may pair with (null: any). Cursors keep this linear in the entries.
+  const pairBy = (keyOf, allowed = () => null) => {
     const pools = new Map();
     for (const e of entries) {
       if (e.partner) continue;
       const k = keyOf(e);
       if (k == null) continue;
-      if (!pools.has(k)) pools.set(k, { del: [], add: [] });
-      pools.get(k)[e.l.t === "-" ? "del" : "add"].push(e);
+      if (!pools.has(k)) pools.set(k, { del: [], add: [], byFile: new Map(), i: 0 });
+      const pool = pools.get(k);
+      if (e.l.t === "-") pool.del.push(e);
+      else {
+        pool.add.push(e);
+        if (!pool.byFile.has(e.f.path)) pool.byFile.set(e.f.path, { list: [], i: 0 });
+        pool.byFile.get(e.f.path).list.push(e);
+      }
     }
-    for (const { del, add } of pools.values()) {
-      for (const a of del) {
-        const b = add.find((x) => !x.partner && ok(a, x));
+    const take = (c) => {
+      while (c.i < c.list.length && c.list[c.i].partner) c.i++;
+      return c.i < c.list.length ? c.list[c.i++] : null;
+    };
+    for (const pool of pools.values()) {
+      const any = { list: pool.add, i: 0 };
+      for (const a of pool.del) {
+        const only = allowed(a);
+        let b = null;
+        if (!only) b = take(any);
+        else for (const p of only) if ((b = pool.byFile.has(p) ? take(pool.byFile.get(p)) : null)) break;
         if (b) pair(a, b);
       }
     }
@@ -313,18 +329,20 @@ function analyzeMechanical(files) {
   }
   pairBy(
     (e) => e.key,
-    (a, b) => a.f === b.f || (linked.get(a.f.path) || new Set()).has(b.f.path),
+    (a) => [a.f.path, ...(linked.get(a.f.path) || [])],
   );
+  const byFile = new Map();
+  for (const e of entries) byFile.set(e.f, [...(byFile.get(e.f) || []), e]);
   const tick = (s) => `\`${s}\``;
   for (const f of files) {
-    if (f.binary) continue;
+    if (f.binary || f.generated) continue;
     if (!f.hunks.length) {
       if (f.status === "renamed" || f.status === "copied")
         f.mechanical = { kind: "rename", proof: `${f.status === "copied" ? "Copied" : "Renamed"} from ${tick(f.oldPath)} with identical contents.` };
       else if (f.status === "modified") f.mechanical = { kind: "mode", proof: "No content change (file mode only)." };
       continue;
     }
-    const mine = entries.filter((e) => e.f === f);
+    const mine = byFile.get(f) || [];
     if (!mine.length) {
       f.mechanical = { kind: "whitespace", proof: "Only blank lines changed." };
       continue;
@@ -343,6 +361,7 @@ function analyzeMechanical(files) {
     const where = others.length ? `between this file and ${others.slice(0, 3).map(tick).join(", ")}${others.length > 3 ? ` and ${others.length - 3} more` : ""}` : "within this file";
     let proof = `No new code: every changed line is an existing line moved ${where}${indented ? ` (${indented} also re-indented)` : ""}.`;
     if (reordered) proof += " Lines were reordered within the file, and order can change behavior.";
+    if (others.length) proof += " Moved code can behave differently where it lands (imports, scope).";
     f.mechanical = { kind: "moved", proof, from: others };
   }
 }
@@ -713,7 +732,7 @@ function collect(opts) {
       baseSha = parent || emptyTree(root);
       baseRef = parent ? `${headRef}~1` : "(empty tree)";
     }
-    const shaLike = headRef === "HEAD" || headSha.startsWith(headRef.toLowerCase());
+    const shaLike = headRef === "HEAD" || (/^[0-9a-f]{7,40}$/i.test(headRef) && headSha.startsWith(headRef.toLowerCase()));
     slug ||= refSlug(shaLike ? headSha.slice(0, 12) : headRef) + (worktree && baseSha === headSha ? "-uncommitted" : "");
   }
 
@@ -723,18 +742,24 @@ function collect(opts) {
   const fingerprint = sha256(patch);
 
   const files = parseUnifiedDiff(patch);
-  const generated = linguistGenerated(root, files.map((f) => f.path));
-  analyzeMechanical(files); // on the raw text, before redaction can make lines look alike
-  for (const [t, src] of pairTests(files.map((f) => f.path))) files.find((f) => f.path === t).testFor = src;
-  const redact = makeRedactor();
-  const baseIsTree = !revParse(root, baseSha);
+  const generated = linguistGenerated(root, [...new Set(files.flatMap((f) => [f.path, f.oldPath].filter(Boolean)))]);
+  const reasonFor = (p) => generatedReason(p) || (generated.has(p) ? "marked linguist-generated in .gitattributes" : null);
   for (const f of files) {
-    f.language = languageFor(f.path);
-    const why = generatedReason(f.path) || (generated.has(f.path) ? "marked linguist-generated in .gitattributes" : null);
+    // A rename counts as generated only if it was generated before, too: moving real source into
+    // build output (or out of it) is a change worth reading.
+    const why = reasonFor(f.path) && (!f.oldPath || f.oldPath === f.path || reasonFor(f.oldPath)) ? reasonFor(f.path) : null;
     if (why) {
       f.generated = true;
       f.generatedBy = why;
     }
+  }
+  analyzeMechanical(files); // on the raw text, before redaction can make lines look alike
+  const fileAt = new Map(files.map((f) => [f.path, f]));
+  for (const [t, src] of pairTests(files.map((f) => f.path))) fileAt.get(t).testFor = src;
+  const redact = makeRedactor();
+  const baseIsTree = !revParse(root, baseSha);
+  for (const f of files) {
+    f.language = languageFor(f.path);
     redactHunks(
       f,
       redact,
