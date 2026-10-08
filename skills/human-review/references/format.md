@@ -9,12 +9,20 @@ Conventions:
 - Every prose field is **Markdown** (GitHub-flavored, so tables, lists, and
   inline code work). Writing a changed path in backticks with an optional line,
   like `` `src/server/routes.ts:31` ``, makes it a link that jumps to that line.
-- Any long text field (`md`, `html`, `css`, `source`, `summary`, `note`,
-  `caption`, `text`, `why`, `example`) can be written as an **array of lines**
-  instead of one string. The build joins them with newlines. Use this for
-  wireframe HTML and Mermaid source so the JSON stays readable.
-- Any block can have an `id` (unique across the file). Give one to blocks you
-  reference from `focus` (`"ref": "#schema"`). Others get generated ids.
+- Any long text field (`brief`, `intro`, `md`, `html`, `css`, `source`,
+  `summary`, `note`, `caption`, `text`, `why`) can be written as an **array of
+  lines** instead of one string. The build joins them with newlines. Use this
+  for wireframe HTML and Mermaid source so the JSON stays readable. (The
+  top-level `summary` is a list of bullets, and API `example`s are JSON values,
+  so neither is joined.)
+- Any block can have an `id`: unique across the file, starting with a letter,
+  using only letters, digits, `-` and `_`. Give one to blocks you reference
+  from `focus` (`"ref": "#schema"`). The others get ids derived from their
+  content. The page reserves `top`, `main`, `overview`, `key-changes`,
+  `checks`, and `files`.
+- The page loads nothing from the network: its Content-Security-Policy blocks
+  remote images, fonts, and stylesheets. Show screenshots with `screenshot`
+  blocks, which embed the image.
 - In wireframe and diagram HTML, use **single quotes for attributes**
   (`<div class='wf-card'>`) to avoid escaping double quotes inside JSON.
 
@@ -159,7 +167,7 @@ icon set.
 { "type": "screenshot", "src": "shots/after.png", "alt": "Share popover", "caption": "Captured from the dev server.", "width": 420 }
 ```
 
-`src` is relative to the folder containing `recap.json`. The image is embedded
+`src` is relative to the folder containing `recap.json` (not a URL). The image is embedded
 in the HTML. Keep each under about 1 MB (crop to the relevant area, or use
 JPEG or WebP). Put screenshots inside `compare` for before/after.
 
@@ -274,8 +282,14 @@ plan tiers, and platform support.
 - An annotation `line` that isn't visible in that diff. The error lists the
   valid ranges and tells you if the number exists on the other side.
 - `keyChanges` with no annotations or no summary (warnings).
-- Wireframe HTML with `<script>`, `<style>`, `<html>`, or `<body>` (error), or
-  with hex colors or `font-family` (warning).
+- Wireframe or diagram HTML containing a tag the page strips along with its
+  contents: `<script>`, `<style>`, `<form>`, `<iframe>`, `<object>`,
+  `<foreignObject>`, and similar (error). Hex colors or `font-family` in
+  wireframes (warning).
+- `questions`, `checks.verified`, and `checks.manual` in the wrong shape
+  (error).
+- Duplicate ids, or ids the page reserves (error). A focus ref to a built-in
+  section that won't appear, like `#checks` when there are no checks (error).
 - A `focus.ref` that points nowhere: an unknown path or `#id`, or a line past
   the end of the file.
 - A `title` over 70 characters (warning).

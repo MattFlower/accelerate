@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; base-uri 'none'; form-action 'none'">
+<!-- The page never loads anything from the network; the policy above enforces that even for agent-written HTML. -->
 <meta name="generator" content="human-review">
 <title>%TITLE%</title>
 <style>/*%FONT_FACE%*/

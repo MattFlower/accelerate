@@ -17,6 +17,9 @@ Plain semantic HTML is styled automatically. Don't add classes for these:
 `h1`–`h4`, `p`, `small`, `a`, `button`, `input`, `select`, `textarea`,
 `input[type=checkbox]`, `label`, `hr`, `table`/`th`/`td`, `ul`/`ol`.
 
+Don't use `<form>` (use a `<div>`), `<iframe>`, `<script>`, or `<style>`: the
+page strips them along with everything inside, and the build rejects them.
+
 Helper classes:
 
 | Class | Use |

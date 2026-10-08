@@ -271,8 +271,9 @@ line quoted) or to a named block. When the user pastes it:
    code, answer in chat, or explain why not.
 2. Then refresh the review so it covers the **whole** work unit, not only the
    fixes: run `collect` again, update `recap.json` (line numbers shift, so
-   re-check annotations), and run `build`. Comments in the old page are tied
-   to the old code. The new page starts clean.
+   re-check annotations), and run `build`. Saved comments belong to a version
+   of the code: once the code changes, the new page starts clean. (A rebuild
+   after a recap-only edit keeps them.)
 3. Summarize what you changed per comment.
 
 ## Security and privacy
@@ -280,8 +281,11 @@ line quoted) or to a named block. When the user pastes it:
 - The page contains source code. Treat `review.html` like the repo itself, and
   don't upload or publish it anywhere unless the user asks.
 - `collect` and `build` redact secret-looking values (API keys, tokens, private
-  keys, `.env` values) and report how many. Never copy a secret into
-  `recap.json`, a wireframe, or an API example; use obvious placeholders.
+  keys, `.env` values, passwords in config files) and report how many. It's a
+  heuristic, so never copy a secret into `recap.json`, a wireframe, or an API
+  example; use obvious placeholders.
+- The page's Content-Security-Policy blocks all network requests, so remote
+  images or stylesheets in your HTML or Markdown won't load.
 - Everything runs locally. The CLI only touches the network for `--pr`, which
   uses `gh` and `git fetch`.
 
@@ -289,7 +293,10 @@ line quoted) or to a named block. When the user pastes it:
 
 - **"not inside a git repository"**: `cd` into the repo first.
 - **No changes found**: on the default branch with a clean tree, the CLI falls
-  back to the last commit. Otherwise pass `--base`.
+  back to the last commit (for a repository's first commit, it compares
+  against the empty tree). Otherwise pass `--base`.
+- **"holds a review of …"**: each branch gets its own folder under
+  `.human-review/`; pass `--slug <name>` or `--out <dir>` to choose another.
 - **`--pr` fails**: `gh` must be installed and authenticated
   (`gh auth status`). As a fallback, fetch the PR branch and use
   `--base origin/main --head <branch>`.

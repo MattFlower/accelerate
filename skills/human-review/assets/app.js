@@ -236,7 +236,9 @@
       }
     },
   };
-  const KEY = `hr:${hash([diff.repo, diff.base.sha, diff.head.sha, diff.fingerprint, recap.title].join("|"))}`;
+  // Tied to the code under review, not to the recap's wording: rebuilding after a recap-only
+  // edit keeps the reviewer's comments.
+  const KEY = `hr:${hash([diff.repo, diff.base.sha, diff.head.sha, diff.fingerprint].join("|"))}`;
   const state = Object.assign({ comments: [], viewed: {}, checks: {}, verdict: null, general: "" }, store.get(KEY, {}));
   const save = () => {
     store.set(KEY, state);
@@ -463,9 +465,12 @@
     );
   }
 
-  function editor({ initial = "", placeholder = "Leave a comment for the author…", onSave, onCancel }) {
+  // `onInput` lets the owner keep a draft across re-renders; `focus` is true only when the
+  // editor opens from a user action (so a background re-render never steals focus or scroll).
+  function editor({ initial = "", placeholder = "Leave a comment for the author…", onSave, onCancel, onInput, focus = true }) {
     const ta = h("textarea", { placeholder, "aria-label": "Comment" });
     ta.value = initial;
+    if (onInput) ta.addEventListener("input", () => onInput(ta.value));
     const doSave = () => {
       const v = ta.value.trim();
       if (v) onSave(v);
@@ -493,8 +498,11 @@
         h("button", { class: "btn primary", type: "button", onclick: doSave }, "Save comment"),
       ),
     );
-    requestAnimationFrame(() => ta.isConnected && ta.focus());
-    setTimeout(() => ta.isConnected && document.activeElement !== ta && ta.focus(), 60);
+    if (focus) {
+      const go = () => ta.isConnected && document.activeElement !== ta && ta.focus({ preventScroll: true });
+      requestAnimationFrame(go);
+      setTimeout(go, 60);
+    }
     return el;
   }
 
@@ -541,6 +549,10 @@
       showAll: false,
       full: false,
       editing: null,
+      draft: "", // unsaved text of a new line comment
+      editDraft: null, // unsaved text while editing an existing comment
+      focusEditor: false,
+      dirty: false, // re-render when its (cached, detached) tab is shown again
       el: h("div", { class: "diff" }),
     };
     inst.render = () => drawDiff(inst, headless);
@@ -639,11 +651,14 @@
           {
             class: "plus",
             type: "button",
+            tabindex: "-1",
             title: "Comment on this line",
             "aria-label": `Comment on line ${num}`,
             onclick: (e) => {
               e.stopPropagation();
+              if (inst.editing && inst.editing.line !== num) inst.draft = "";
               inst.editing = { side: side === "o" ? "old" : "new", line: num };
+              inst.focusEditor = true;
               inst.render();
             },
           },
@@ -660,6 +675,12 @@
     };
     const signCell = (t, cls) => h("td", { class: `s ${cls || ""}` }, t === " " ? "" : t === "-" ? "−" : t || "");
 
+    // The first editor built after a user action gets focus; re-renders don't.
+    const takeFocus = () => {
+      const f = inst.focusEditor;
+      inst.focusEditor = false;
+      return f;
+    };
     const notesAfter = (keys, linesInRow) => {
       const out = [];
       for (const key of keys) {
@@ -683,14 +704,18 @@
                     "div",
                     { class: `note you side-${side[0]}` },
                     editor({
-                      initial: c.body,
+                      initial: inst.editDraft ?? c.body,
+                      focus: takeFocus(),
+                      onInput: (v) => (inst.editDraft = v),
                       onSave: (v) => {
                         inst.editingId = null;
+                        inst.editDraft = null;
                         updateComment(c.id, v);
                         rerenderFile(file.path);
                       },
                       onCancel: () => {
                         inst.editingId = null;
+                        inst.editDraft = null;
                         inst.render();
                       },
                     }),
@@ -713,6 +738,8 @@
                     rerenderFile(file.path);
                   } else {
                     inst.editingId = c.id;
+                    inst.editDraft = null;
+                    inst.focusEditor = true;
                     inst.render();
                   }
                 }),
@@ -733,13 +760,18 @@
                   "div",
                   { class: `note you side-${side[0]}` },
                   editor({
+                    initial: inst.draft,
+                    focus: takeFocus(),
+                    onInput: (v) => (inst.draft = v),
                     onSave: (v) => {
                       inst.editing = null;
+                      inst.draft = "";
                       addComment({ type: "line", file: file.path, side, line, code: src }, v);
                       rerenderFile(file.path);
                     },
                     onCancel: () => {
                       inst.editing = null;
+                      inst.draft = "";
                       inst.render();
                     },
                   }),
@@ -888,6 +920,20 @@
       rendered++;
     }
 
+    // Keyboard: one tab stop per table (the first + button); arrow keys move between lines.
+    const pluses = table.querySelectorAll(".plus");
+    if (pluses.length) pluses[0].tabIndex = 0;
+    table.addEventListener("keydown", (e) => {
+      if (!e.target.classList || !e.target.classList.contains("plus") || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
+      const all = [...table.querySelectorAll(".plus")];
+      const next = all[all.indexOf(e.target) + (e.key === "ArrowDown" ? 1 : -1)];
+      if (!next) return;
+      e.preventDefault();
+      e.target.tabIndex = -1;
+      next.tabIndex = 0;
+      next.focus();
+    });
+
     el.classList.toggle("split", mode === "split");
     el.append(h("div", { class: "diff-scroll" }, table));
     if (truncated) {
@@ -928,30 +974,30 @@
     );
   }
 
+  // Diffs in cached tab panels are detached from the document; they re-render when shown.
+  function refresh(inst) {
+    if (inst.el.isConnected) {
+      inst.dirty = false;
+      inst.render();
+    } else inst.dirty = true;
+  }
+
   function setViewed(p, v) {
     if (v) state.viewed[p] = true;
     else delete state.viewed[p];
     save();
-    for (const inst of liveDiffs) if (inst.file.path === p && inst.el.isConnected) inst.render();
+    for (const inst of liveDiffs) if (inst.file.path === p) refresh(inst);
     for (const box of document.querySelectorAll(`[data-viewed="${CSS.escape(p)}"]`)) box.checked = v;
     for (const row of document.querySelectorAll(`.frow[data-path="${CSS.escape(p)}"]`)) row.classList.toggle("is-viewed", v);
     renderSideFiles();
   }
 
   function rerenderFile(p) {
-    for (const inst of [...liveDiffs]) {
-      if (!inst.el.isConnected) continue;
-      if (inst.file.path === p) inst.render();
-    }
+    for (const inst of liveDiffs) if (inst.file.path === p) refresh(inst);
+    renderSideFiles();
   }
   function rerenderAllDiffs() {
-    for (const inst of [...liveDiffs]) {
-      if (!inst.el.isConnected) {
-        liveDiffs.delete(inst);
-        continue;
-      }
-      inst.render();
-    }
+    for (const inst of liveDiffs) refresh(inst);
   }
 
   // `code` blocks: an excerpt of a file at head (changed or not).
@@ -1195,6 +1241,7 @@ ul, ol { margin: 0; padding-left: 18px; }
 .dg-pill.added { color: var(--add-ink); border-color: var(--add-ink); } .dg-pill.removed { color: var(--del-ink); border-color: var(--del-ink); }
 .dg-pill.risk { color: var(--risk); border-color: var(--risk); }
 .dg-note { font-size: 12px; color: var(--muted); }
+.wf-icon { width: 1.1em; height: 1.1em; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.18em; flex: none; }
 .dg-arrow { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; min-width: 56px; gap: 2px; color: var(--ink-2); font-size: 11.5px; flex: none; }
 .dg-arrow::after { content: ""; display: block; width: 100%; min-width: 48px; height: 10px;
   background: linear-gradient(currentColor, currentColor) left center / calc(100% - 7px) 1.5px no-repeat;
@@ -1530,7 +1577,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         const names = { risk: "Risk", breaking: "Breaking change", decision: "Decision", note: "Note", question: "Question", security: "Security", perf: "Performance" };
         el = h(
           "div",
-          { class: `callout ${k}` },
+          { class: `callout k-${k}` },
           icon(k),
           h("div", null, h("div", { class: "ct" }, h("span", { class: "kind" }, names[k] || k), b.title || ""), b.md ? md(b.md) : null),
         );
@@ -1602,6 +1649,13 @@ ul, ol { margin: 0; padding-left: 18px; }
   function attachBlockComments(wrap, id, label) {
     const notes = h("div", { class: "blk-notes" });
     let editing = null;
+    let draft = null; // unsaved editor text, kept across redraws (e.g. a delete from the drawer)
+    let focusNext = false;
+    const takeFocus = () => {
+      const f = focusNext;
+      focusNext = false;
+      return f;
+    };
     const draw = () => {
       notes.textContent = "";
       for (const c of state.comments.filter((x) => x.anchor.type === "block" && x.anchor.id === id)) {
@@ -1611,14 +1665,18 @@ ul, ol { margin: 0; padding-left: 18px; }
               "div",
               { class: "note you" },
               editor({
-                initial: c.body,
+                initial: draft ?? c.body,
+                focus: takeFocus(),
+                onInput: (v) => (draft = v),
                 onSave: (v) => {
                   editing = null;
+                  draft = null;
                   updateComment(c.id, v);
                   draw();
                 },
                 onCancel: () => {
                   editing = null;
+                  draft = null;
                   draw();
                 },
               }),
@@ -1628,7 +1686,11 @@ ul, ol { margin: 0; padding-left: 18px; }
           notes.append(
             commentView(c, (act) => {
               if (act === "delete") deleteComment(c.id);
-              else editing = c.id;
+              else {
+                editing = c.id;
+                draft = null;
+                focusNext = true;
+              }
               draw();
             }),
           );
@@ -1639,13 +1701,18 @@ ul, ol { margin: 0; padding-left: 18px; }
             "div",
             { class: "note you" },
             editor({
+              initial: draft ?? "",
+              focus: takeFocus(),
+              onInput: (v) => (draft = v),
               onSave: (v) => {
                 editing = null;
+                draft = null;
                 addComment({ type: "block", id, label }, v);
                 draw();
               },
               onCancel: () => {
                 editing = null;
+                draft = null;
                 draw();
               },
             }),
@@ -1662,7 +1729,9 @@ ul, ol { margin: 0; padding-left: 18px; }
           title: "Comment on this",
           "aria-label": `Comment on ${label}`,
           onclick: () => {
+            if (editing !== "new") draft = null;
             editing = "new";
+            focusNext = true;
             draw();
           },
         },
@@ -1723,6 +1792,12 @@ ul, ol { margin: 0; padding-left: 18px; }
       });
       if (!cache.has(i)) cache.set(i, tabs[i].render());
       panel.replaceChildren(cache.get(i));
+      for (const d of panel.querySelectorAll(".diff")) {
+        if (d._inst && d._inst.dirty) {
+          d._inst.dirty = false;
+          d._inst.render();
+        }
+      }
       panel.setAttribute("aria-labelledby", `${id}-tab-${i}`);
       el.dataset.active = i;
       requestAnimationFrame(redrawWireframes);
@@ -1911,9 +1986,10 @@ ul, ol { margin: 0; padding-left: 18px; }
   }
 
   function renderChecks() {
-    const q = recap.questions || [];
-    const verified = (recap.checks && recap.checks.verified) || [];
-    const manual = (recap.checks && recap.checks.manual) || [];
+    const list = (v) => (Array.isArray(v) ? v : []);
+    const q = list(recap.questions);
+    const verified = list(recap.checks && recap.checks.verified);
+    const manual = list(recap.checks && recap.checks.manual);
     if (!q.length && !verified.length && !manual.length) return null;
     const sec = sectionShell("checks", "Before you approve");
     const grid = h("div", { class: "checks-grid" });
@@ -1926,7 +2002,8 @@ ul, ol { margin: 0; padding-left: 18px; }
         const draw = (editing) => {
           body.textContent = "";
           body.append(md(text, { cls: "" }));
-          const replies = state.comments.filter((c) => c.anchor.type === "question" && c.anchor.index === i);
+          const qk = hash(String(text));
+          const replies = state.comments.filter((c) => c.anchor.type === "question" && (c.anchor.key === qk || (c.anchor.key == null && c.anchor.text === text)));
           for (const c of replies) {
             if (editing === c.id) {
               body.append(h("div", { class: "note you", style: { margin: "8px 0 0" } }, editor({ initial: c.body, onSave: (v) => (updateComment(c.id, v), draw()), onCancel: () => draw() })));
@@ -1941,7 +2018,7 @@ ul, ol { margin: 0; padding-left: 18px; }
               h(
                 "div",
                 { class: "note you", style: { margin: "8px 0 0" } },
-                editor({ placeholder: "Your answer…", onSave: (v) => (addComment({ type: "question", index: i, text }, v), draw()), onCancel: () => draw() }),
+                editor({ placeholder: "Your answer…", onSave: (v) => (addComment({ type: "question", key: qk, text }, v), draw()), onCancel: () => draw() }),
               ),
             );
           } else if (!replies.length) {
@@ -1982,7 +2059,7 @@ ul, ol { margin: 0; padding-left: 18px; }
             "ul",
             null,
             manual.map((m) => {
-              const k = hash(m);
+              const k = hash(String(m));
               const lab = h("label", { class: state.checks[k] ? "done" : "" });
               const box = h("input", {
                 type: "checkbox",
@@ -2043,6 +2120,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         "aria-expanded": "false",
         onclick: () => toggle(),
         onkeydown: (e) => {
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             toggle();
@@ -2170,7 +2248,7 @@ ul, ol { margin: 0; padding-left: 18px; }
 
   let sideEl, sideFilesEl, progressEl, progressLabel, feedbackCount;
   function renderTop() {
-    const hasWire = JSON.stringify(recap).includes('"type":"wireframe"');
+    const hasWire = Array.isArray(meta.types) ? meta.types.includes("wireframe") : JSON.stringify(recap).includes('"type":"wireframe"');
     const modeSeg = h(
       "div",
       { class: "seg hide-sm", role: "group", "aria-label": "Diff layout" },
@@ -2410,7 +2488,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         a.type === "line"
           ? h("a", { href: "#", dataset: { ref: `${a.file}:${a.side === "old" ? "" : a.line}`.replace(/:$/, "") }, onclick: closeDrawer }, `${a.file}:${a.line}${a.side === "old" ? " (old)" : ""}`)
           : a.type === "block"
-            ? h("a", { href: "#", dataset: { ref: `#${a.id}` }, onclick: closeDrawer }, blockLabels.get(a.id) || a.label)
+            ? h("a", { href: "#", dataset: { ref: `#${a.id}` }, onclick: closeDrawer }, a.label || blockLabels.get(a.id))
             : h("a", { href: "#checks", onclick: closeDrawer }, "Answer to a question");
       list.append(
         h(
@@ -2440,6 +2518,21 @@ ul, ol { margin: 0; padding-left: 18px; }
     }
   }
   let lastFocus = null;
+  // While the drawer is open, Tab cycles inside it.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab" || !drawer || !drawer.classList.contains("show")) return;
+    const f = [...drawer.querySelectorAll("button, textarea, a[href], input")].filter((x) => !x.disabled && x.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0];
+    const last = f[f.length - 1];
+    if (e.shiftKey && (document.activeElement === first || !drawer.contains(document.activeElement))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (document.activeElement === last || !drawer.contains(document.activeElement))) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
   function openDrawer() {
     lastFocus = document.activeElement;
     drawCommentList();
@@ -2468,8 +2561,8 @@ ul, ol { margin: 0; padding-left: 18px; }
     L.push(`- Repo: ${diff.repo}`);
     L.push(`- Range: ${diff.base.ref} @ ${diff.base.sha.slice(0, 10)} .. ${diff.head.ref} @ ${diff.head.worktree ? "working tree" : diff.head.sha.slice(0, 10)}`);
     L.push(`- Verdict: **${v}**`);
-    const manual = (recap.checks && recap.checks.manual) || [];
-    if (manual.length) L.push(`- Manual checks done: ${manual.filter((m) => state.checks[hash(m)]).length} of ${manual.length}`);
+    const manual = Array.isArray(recap.checks && recap.checks.manual) ? recap.checks.manual : [];
+    if (manual.length) L.push(`- Manual checks done: ${manual.filter((m) => state.checks[hash(String(m))]).length} of ${manual.length}`);
     const viewed = reviewable.filter((f) => state.viewed[f.path]).length;
     L.push(`- Files viewed: ${viewed} of ${reviewable.length}`);
     if (state.general && state.general.trim()) {
@@ -2495,7 +2588,7 @@ ul, ol { margin: 0; padding-left: 18px; }
             L.push(`   ${fence}${(f && f.language) || ""}`, `   ${a.code}`, `   ${fence}`);
           }
         } else {
-          L.push(`${i + 1}. On **${blockLabels.get(a.id) || a.label}** (block \`${a.id}\`)`);
+          L.push(`${i + 1}. On **${a.label || blockLabels.get(a.id)}** (block \`${a.id}\`)`);
         }
         for (const line of c.body.split("\n")) L.push(`   > ${line}`);
         L.push("");

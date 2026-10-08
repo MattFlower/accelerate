@@ -327,13 +327,13 @@ main.hr-main { padding: 44px clamp(20px, 4vw, 56px) 140px; }
 .callout > svg.i { color: var(--k, var(--marker-ink)); margin-top: 2px; width: 18px; height: 18px; }
 .callout .ct { font-weight: 650; margin-bottom: 2px; }
 .callout .prose { font-size: 14.5px; }
-.callout.risk, .callout.breaking, .callout.security { --k: var(--risk); --kw: var(--risk-wash); }
-.callout.question { --k: var(--question); --kw: var(--question-wash); }
-.callout.decision { --k: var(--decision); --kw: var(--decision-wash); }
-.callout.note, .callout.perf { --k: var(--marker); --kw: var(--marker-wash); }
-.callout.note > svg.i, .callout.perf > svg.i { color: var(--marker-ink); }
+.callout.k-risk, .callout.k-breaking, .callout.k-security { --k: var(--risk); --kw: var(--risk-wash); }
+.callout.k-question { --k: var(--question); --kw: var(--question-wash); }
+.callout.k-decision { --k: var(--decision); --kw: var(--decision-wash); }
+.callout.k-note, .callout.k-perf { --k: var(--marker); --kw: var(--marker-wash); }
+.callout.k-note > svg.i, .callout.k-perf > svg.i { color: var(--marker-ink); }
 .callout .kind { font-weight: 600; color: var(--k-ink, var(--k)); font-size: 12.5px; margin-right: 6px; }
-.callout.note, .callout.perf { --k-ink: var(--marker-ink); }
+.callout.k-note, .callout.k-perf { --k-ink: var(--marker-ink); }
 
 /* compare */
 .compare { display: grid; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); gap: 24px; align-items: start; }
@@ -424,10 +424,11 @@ table.code td.n .plus {
   position: absolute; left: 3px; top: 2px;
   width: 16px; height: 16px; border-radius: 4px; border: 0; padding: 0;
   background: var(--you); color: #fff; cursor: pointer;
-  display: none; place-items: center;
+  display: grid; place-items: center;
+  opacity: 0; pointer-events: none;
 }
 table.code td.n .plus svg { width: 12px; height: 12px; stroke-width: 2.6; }
-table.code tr:hover td.n .plus, table.code td.n .plus:focus-visible { display: grid; }
+table.code tr:hover td.n .plus, table.code td.n .plus:focus-visible { opacity: 1; pointer-events: auto; }
 
 /* note rows */
 table.code tr.note-row td { padding: 0; background: var(--surface); }
@@ -682,10 +683,11 @@ table.code .noeol { margin-left: 8px; padding: 0 5px; border: 1px solid var(--ru
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 50;
   width: min(460px, 100vw);
   background: var(--surface); border-left: 1px solid var(--rule);
-  transform: translateX(102%); transition: transform 0.24s cubic-bezier(0.2, 0.7, 0.2, 1);
+  transform: translateX(102%); visibility: hidden;
+  transition: transform 0.24s cubic-bezier(0.2, 0.7, 0.2, 1), visibility 0s linear 0.24s;
   display: flex; flex-direction: column;
 }
-.drawer.show { transform: none; box-shadow: -24px 0 60px rgba(10, 12, 16, 0.18); }
+.drawer.show { transform: none; visibility: visible; transition: transform 0.24s cubic-bezier(0.2, 0.7, 0.2, 1); box-shadow: -24px 0 60px rgba(10, 12, 16, 0.18); }
 .drawer > header { display: flex; align-items: center; gap: 10px; padding: 16px 18px; border-bottom: 1px solid var(--rule); }
 .drawer > header h2 { margin: 0; font-size: 17px; font-weight: 650; flex: 1; }
 .drawer .body { flex: 1; overflow: auto; padding: 18px; display: grid; gap: 22px; align-content: start; }
@@ -732,9 +734,10 @@ table.code .noeol { margin-left: 8px; padding: 0 5px; border: 1px solid var(--ru
   .hr-shell { grid-template-columns: minmax(0, 1fr); }
   .hr-side {
     position: fixed; top: var(--top); left: 0; bottom: 0; z-index: 35; width: 290px; height: auto;
-    background: var(--surface); transform: translateX(-102%); transition: transform 0.22s;
+    background: var(--surface); transform: translateX(-102%); visibility: hidden;
+    transition: transform 0.22s, visibility 0s linear 0.22s;
   }
-  .hr-side.show { transform: none; box-shadow: 24px 0 60px rgba(10, 12, 16, 0.18); }
+  .hr-side.show { transform: none; visibility: visible; transition: transform 0.22s; box-shadow: 24px 0 60px rgba(10, 12, 16, 0.18); }
   .hr-top .hr-menu-btn { display: inline-flex; }
   .hr-top-title { display: none; }
   .compare { grid-template-columns: minmax(0, 1fr); }

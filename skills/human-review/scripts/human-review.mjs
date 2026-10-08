@@ -24,20 +24,28 @@ const MAX_SCREENSHOT_BYTES = 4_000_000;
 
 // ───────────────────────────────────────────────────────────── utilities
 
-function die(msg, code = 1) {
-  process.stderr.write(`human-review: ${msg}\n`);
-  process.exit(code);
+class CliError extends Error {
+  constructor(msg, code = 1) {
+    super(msg);
+    this.code = code;
+  }
 }
 
-function git(args, { cwd, allowFail = false, okCodes = [0] } = {}) {
+// Throws (rather than exiting) so callers can recover; main() prints it once.
+function die(msg, code = 1) {
+  throw new CliError(msg, code);
+}
+
+function git(args, { cwd, allowFail = false, okCodes = [0], input } = {}) {
   const r = spawnSync("git", ["-c", "core.quotePath=false", ...args], {
     cwd,
+    input,
     encoding: "utf8",
     maxBuffer: 512 * 1024 * 1024,
   });
-  if (r.error) die(`could not run git: ${r.error.message}`);
-  if (!okCodes.includes(r.status)) {
+  if (r.error || !okCodes.includes(r.status)) {
     if (allowFail) return null;
+    if (r.error) die(`could not run git in ${cwd}: ${r.error.message}`);
     die(`git ${args.join(" ")} failed:\n${r.stderr.trim()}`);
   }
   return r.stdout;
@@ -238,9 +246,13 @@ function linguistGenerated(root, paths) {
     cwd: root,
     input: paths.join("\0"),
     encoding: "utf8",
+    maxBuffer: 512 * 1024 * 1024,
   });
   const out = new Set();
-  if (r.status !== 0) return out;
+  if (r.error || r.status !== 0) {
+    process.stderr.write(`  warn   could not read .gitattributes (linguist-generated): ${r.error ? r.error.message : r.stderr.trim()}\n`);
+    return out;
+  }
   // -z output: path NUL attribute NUL value NUL …
   const parts = r.stdout.split("\0");
   for (let i = 0; i + 2 < parts.length; i += 3) {
@@ -278,6 +290,10 @@ function languageFor(p) {
 
 const SECRET_PATTERNS = [
   /AKIA[0-9A-Z]{16}/g,
+  /\bnpm_[A-Za-z0-9]{30,}/g,
+  /\bglpat-[A-Za-z0-9_-]{20,}/g,
+  // A whole key written on one line (JSON/env strings with escaped newlines).
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\[rn]|[A-Za-z0-9+/=:\s-])+?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
   /\b(?:sk|pk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g,
   /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/g,
   /\bgh[pousr]_[A-Za-z0-9]{30,}/g,
@@ -287,30 +303,60 @@ const SECRET_PATTERNS = [
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
   /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]+/g,
 ];
-const ASSIGNED_SECRET =
-  /((?:secret|token|passw(?:or)?d|api[_-]?key|private[_-]?key|client[_-]?secret|auth)[A-Za-z0-9_]*["']?\s*[:=]\s*["'])([^"'\s]{8,})(["'])/gi;
+// A key name that ends in a secret-ish word: password, DB_PASSWORD, apiKey, aws_secret_access_key,
+// _authToken… but not tokenizer, authorField, or passwordPolicy.
+const SECRET_KEY = String.raw`(?:secret|token|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|credentials?|auth[_-]?token)(?:[_-]?(?:value|key|id))?(?![A-Za-z0-9])`;
+// Quoted values in any file: password: "…", "apiKey": "…".
+const ASSIGNED_SECRET = new RegExp(String.raw`(${SECRET_KEY}["']?\s*[:=]\s*["'])([^"'\s]{8,})(["'])`, "gi");
+// Unquoted values in config-style files (YAML, INI, .properties, .npmrc, credentials).
+const CONFIG_SECRET = new RegExp(String.raw`^(\s*[\w.\/:@-]*?${SECRET_KEY}\s*[:=]\s*)(?![\s"'$<{%!&*\[|>])([^\r\n]*?)(\s+[#;][^\r\n]*)?(\r?)$`, "i");
+const CONFIG_FILE = /(\.(ya?ml|ini|cfg|conf|properties|toml|tfvars|hcl|npmrc|pypirc|netrc)$|(^|\/)(\.npmrc|\.pypirc|\.netrc|\.git-credentials|credentials|config)$)/i;
+const NOT_A_SECRET = /^(true|false|null|none|nil|yes|no|on|off|~|\d+)$/i;
 const REDACTED = "‹redacted›";
+
+// Private keys span lines, so they're found from a file's full text, never from a hunk alone.
+const KEY_BEGIN = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+const KEY_END = /-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+const BASE64_LINE = /^\s*[A-Za-z0-9+/]{16,}={0,2}\s*$/;
+const ARMOR_LINE = /^\s*((Proc-Type|DEK-Info|Version|Comment|Hash|Charset): .*|=[A-Za-z0-9+/]{4}|)\s*$/i;
+
+// 1-based numbers of the lines holding key material: the base64 body after a BEGIN marker.
+// A line that merely mentions the marker (code, docs) is followed by non-base64 and yields nothing.
+function keyLines(lines) {
+  const out = new Set();
+  for (let i = 0; i < lines.length; i++) {
+    if (!KEY_BEGIN.test(lines[i]) || KEY_END.test(lines[i])) continue;
+    let j = i + 1;
+    while (j < lines.length && !KEY_END.test(lines[j]) && (BASE64_LINE.test(lines[j]) || ARMOR_LINE.test(lines[j]))) out.add(++j);
+    i = j - 1;
+  }
+  return out;
+}
+
+// Could this hunk touch a private key? (Cheap check before reading whole files.)
+const mayHoldKey = (s) => KEY_BEGIN.test(s) || KEY_END.test(s) || (s.length >= 40 && BASE64_LINE.test(s));
 
 function isEnvFile(p) {
   const b = path.basename(p).toLowerCase();
   return b.startsWith(".env") && !/(example|sample|template|dist|defaults)/.test(b);
 }
 
+// Line redactor. Stateless: the same line always redacts the same way, wherever it appears.
 function makeRedactor() {
   let count = 0;
-  let inKey = false;
   const fn = (s, file) => {
-    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(s)) inKey = true;
-    if (inKey) {
-      if (/-----END [A-Z ]*PRIVATE KEY-----/.test(s)) inKey = false;
-      count++;
-      return REDACTED;
-    }
+    if (typeof s !== "string" || !s) return s;
     let out = s;
     if (file && isEnvFile(file)) {
-      out = out.replace(/^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)(.+)$/, (m, k, v) => {
+      out = out.replace(/^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^\r\n]+?)(\r?)$/, (m, k, v, cr) => {
         count++;
-        return k + REDACTED;
+        return k + REDACTED + cr;
+      });
+    } else if (file && CONFIG_FILE.test(file)) {
+      out = out.replace(CONFIG_SECRET, (m, k, v, comment = "", cr) => {
+        if (v.length < 6 || NOT_A_SECRET.test(v) || v === REDACTED) return m;
+        count++;
+        return k + REDACTED + comment + cr;
       });
     }
     for (const re of SECRET_PATTERNS) {
@@ -327,8 +373,59 @@ function makeRedactor() {
     return out;
   };
   fn.count = () => count;
-  fn.reset = () => (inKey = false);
+  fn.bump = () => count++;
   return fn;
+}
+
+// Redact a file's lines given its full text (for key blocks) plus the line redactor.
+function redactText(text, file, redact) {
+  const lines = text.split("\n");
+  const keys = keyLines(lines);
+  return lines.map((l, i) => (keys.has(i + 1) ? (redact.bump(), REDACTED) : redact(l, file))).join("\n");
+}
+
+// Read a file as of a commit, or from the working tree. Symlinks yield their target path
+// (what git stores), never the target's contents, and nothing outside the repo is read.
+function readFileAt(root, { sha, worktree }, p, maxBytes = MAX_EMBED_FILE_BYTES) {
+  if (!p || path.isAbsolute(p) || p.split(/[\\/]/).includes("..")) return null;
+  if (worktree) {
+    const abs = path.join(root, p);
+    try {
+      const st = fs.lstatSync(abs);
+      if (st.isSymbolicLink()) return fs.readlinkSync(abs);
+      if (!st.isFile() || st.size > maxBytes) return null;
+      const real = fs.realpathSync(abs);
+      if (!real.startsWith(fs.realpathSync(root) + path.sep)) return null;
+      return fs.readFileSync(abs, "utf8");
+    } catch {
+      return null;
+    }
+  }
+  const size = git(["cat-file", "-s", `${sha}:${p}`], { cwd: root, allowFail: true });
+  if (!size || Number(size) > maxBytes) return null;
+  return git(["show", `${sha}:${p}`], { cwd: root, allowFail: true });
+}
+
+// Redact a parsed file's hunks in place. Key blocks are located in the full old and new text,
+// so a hunk that starts mid-key (or a key line used as git's hunk header) is still covered.
+function redactHunks(f, redact, readOld, readNew) {
+  const all = f.hunks.flatMap((h) => [h.header, ...h.lines.map((l) => l.s)]);
+  let oldKeys = new Set();
+  let newKeys = new Set();
+  if (all.some(mayHoldKey)) {
+    const oldText = f.status === "added" ? null : readOld(f.oldPath || f.path);
+    const newText = f.status === "deleted" ? null : readNew(f.path);
+    if (oldText) oldKeys = keyLines(oldText.split("\n"));
+    if (newText) newKeys = keyLines(newText.split("\n"));
+  }
+  const anyKeys = oldKeys.size + newKeys.size > 0;
+  for (const h of f.hunks) {
+    h.header = anyKeys && h.header.length >= 40 && BASE64_LINE.test(h.header) ? (redact.bump(), REDACTED) : redact(h.header, f.path);
+    for (const l of h.lines) {
+      const isKey = (l.t !== "+" && oldKeys.has(l.o)) || (l.t !== "-" && newKeys.has(l.n));
+      l.s = isKey ? (redact.bump(), REDACTED) : redact(l.s, f.path);
+    }
+  }
 }
 
 // ───────────────────────────────────────────────────────────── collect
@@ -342,6 +439,17 @@ function repoRoot(cwd) {
 function revParse(root, ref) {
   const r = git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd: root, allowFail: true });
   return r ? r.trim() : null;
+}
+
+// The empty tree: the "before" of a repository's first commit.
+function emptyTree(root) {
+  return git(["hash-object", "-t", "tree", "--stdin"], { cwd: root, input: "" }).trim();
+}
+
+// A folder name per ref that never collides: lossy slugs get a short hash of the real name.
+function refSlug(ref) {
+  const s = slugify(ref);
+  return s === ref ? s : `${s.slice(0, 50)}-${sha256(ref).slice(0, 6)}`;
 }
 
 function defaultBaseRef(root) {
@@ -423,7 +531,7 @@ function collect(opts) {
     baseRef = typeof opts.base === "string" ? opts.base : defaultBaseRef(root);
     if (baseRef) {
       const tip = revParse(root, baseRef);
-      if (!tip) die(`cannot resolve base ${baseRef}`);
+      if (!tip) die(`cannot resolve base ${baseRef}${/[~^]\d*$/.test(baseRef) && !revParse(root, `${headSha}~1`) ? " — HEAD is the repository's first commit; run collect without --base to review it" : ""}`);
       baseSha = typeof opts.base === "string" && opts["no-merge-base"] ? tip : git(["merge-base", tip, headSha], { cwd: root }).trim();
     } else {
       baseRef = "HEAD";
@@ -435,13 +543,12 @@ function collect(opts) {
     if (opts.uncommitted === true) worktree = true;
     if (baseSha === headSha && !worktree && opts.base === undefined) {
       // On the default branch with nothing ahead: fall back to the last commit.
+      // The first commit has no parent: compare it with the empty tree.
       const parent = revParse(root, `${headSha}~1`);
-      if (parent) {
-        baseSha = parent;
-        baseRef = `${headRef}~1`;
-      }
+      baseSha = parent || emptyTree(root);
+      baseRef = parent ? `${headRef}~1` : "(empty tree)";
     }
-    slug ||= slugify(headRef === "HEAD" ? headSha.slice(0, 8) : headRef) + (worktree && baseSha === headSha ? "-uncommitted" : "");
+    slug ||= refSlug(headRef === "HEAD" ? headSha.slice(0, 8) : headRef) + (worktree && baseSha === headSha ? "-uncommitted" : "");
   }
 
   const outRel = opts.out ? path.relative(root, path.resolve(opts.out)) : ".human-review";
@@ -452,14 +559,16 @@ function collect(opts) {
   const files = parseUnifiedDiff(patch);
   const generated = linguistGenerated(root, files.map((f) => f.path));
   const redact = makeRedactor();
+  const baseIsTree = !revParse(root, baseSha);
   for (const f of files) {
     f.language = languageFor(f.path);
     if (isGenerated(f.path) || generated.has(f.path)) f.generated = true;
-    redact.reset();
-    for (const h of f.hunks) {
-      h.header = redact(h.header, null);
-      for (const l of h.lines) l.s = redact(l.s, f.path);
-    }
+    redactHunks(
+      f,
+      redact,
+      (p) => (baseIsTree ? null : readFileAt(root, { sha: baseSha }, p, Infinity)),
+      (p) => readFileAt(root, { sha: headSha, worktree }, p, Infinity),
+    );
   }
   if (pr) {
     pr.title = redact(pr.title, null);
@@ -467,21 +576,32 @@ function collect(opts) {
   }
 
   const range = worktree ? `${baseSha}..(working tree)` : `${baseSha}..${headSha}`;
-  const logRange = baseSha === headSha ? null : `${baseSha}..${headSha}`;
+  const logRange = baseSha === headSha ? null : baseIsTree ? headSha : `${baseSha}..${headSha}`;
+  // --no-show-signature: log.showSignature would print verification lines into this output.
   const commits = logRange
-    ? git(["log", "--format=%h%x1f%an%x1f%aI%x1f%s", logRange], { cwd: root })
+    ? git(["log", "--no-show-signature", "--format=%h%x1f%an%x1f%aI%x1f%s", logRange], { cwd: root })
         .split("\n")
-        .filter(Boolean)
-        .map((l) => {
-          const [sha, author, date, subject] = l.split("\x1f");
-          return { sha, author, date, subject: redact(subject, null) };
-        })
+        .map((l) => l.split("\x1f"))
+        .filter((parts) => parts.length === 4)
+        .map(([sha, author, date, subject]) => ({ sha, author, date, subject: redact(subject, null) }))
     : [];
 
   const remote = (git(["remote", "get-url", "origin"], { cwd: root, allowFail: true }) || "").trim();
   const repoName = (remote.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/) || [])[1] || path.basename(root);
 
   const outDir = path.resolve(opts.out || path.join(root, ".human-review", slug));
+  // Never overwrite another change's review (and silently inherit its recap.json).
+  const prior = path.join(outDir, "diff.json");
+  if (fs.existsSync(prior)) {
+    let was = null;
+    try {
+      was = JSON.parse(fs.readFileSync(prior, "utf8"));
+    } catch {
+      /* unreadable — treat as ours */
+    }
+    if (was && (was.head?.ref !== headRef || (was.pr?.number ?? null) !== (pr?.number ?? null)))
+      die(`${outDir} holds a review of ${was.pr ? `PR #${was.pr.number}` : was.head?.ref}, not ${pr ? `PR #${pr.number}` : headRef}. Pass --slug <name> or --out <dir> to keep them apart.`);
+  }
   fs.mkdirSync(outDir, { recursive: true });
   if (!opts.out) excludeFromGit(root, ".human-review");
 
@@ -623,21 +743,39 @@ const CHANGE = new Set(["added", "removed", "modified", "renamed", "unchanged"])
 const ANNOTATION_KINDS = new Set(["note", "risk", "question", "decision", "praise"]);
 const CALLOUT_KINDS = new Set(["note", "risk", "breaking", "decision", "question", "security", "perf"]);
 const SURFACES = new Set(["browser", "desktop", "mobile", "popover", "panel", "bare"]);
-const TEXT_KEYS = new Set(["md", "html", "css", "source", "brief", "why", "summary", "note", "caption", "text"]);
+const TEXT_KEYS = new Set(["md", "html", "css", "source", "brief", "intro", "why", "summary", "note", "caption", "text"]);
+// Ids the page itself uses; recap ids must not shadow them.
+const RESERVED_IDS = new Set(["top", "main", "app", "overview", "key-changes", "checks", "files", "hr-data", "hr-title", "hr-top-title"]);
+const isReservedId = (id) => RESERVED_IDS.has(id) || /^(file-|t\d+-|v-|mmd\d)/.test(id);
+const VALID_ID = /^[A-Za-z][\w-]*$/;
+// Tags the renderer strips together with everything inside them.
+const STRIPPED_TAGS = /<(script|style|link|meta|base|html|body|head|form|iframe|object|embed|frame|frameset|foreignobject|animate|set|animatetransform|animatemotion)\b/i;
 
 // Long text fields may be written as an array of lines — join them.
-// (The top-level `summary` is a bullet list, so the root object is not joined.)
+// The top-level `summary` is a bullet list and API `example`s are JSON values, so neither is joined.
 function normalizeText(node, depth = 0) {
   if (Array.isArray(node)) return node.map((x) => normalizeText(x, depth + 1));
   if (node && typeof node === "object") {
     for (const [k, v] of Object.entries(node)) {
-      if (k === "example") continue; // payloads are data, not prose
-      if (depth > 0 && TEXT_KEYS.has(k) && Array.isArray(v) && v.every((x) => typeof x === "string")) node[k] = v.join("\n");
+      if (k === "example") continue;
+      if ((depth > 0 || k === "brief") && TEXT_KEYS.has(k) && Array.isArray(v) && v.every((x) => typeof x === "string")) node[k] = v.join("\n");
       else node[k] = normalizeText(v, depth + 1);
     }
   }
   return node;
 }
+
+// Every explicit block id in the recap, so generated ids never take one.
+function explicitIds(node, out = new Set()) {
+  if (Array.isArray(node)) node.forEach((x) => explicitIds(x, out));
+  else if (node && typeof node === "object") {
+    if (typeof node.type === "string" && typeof node.id === "string") out.add(node.id);
+    for (const v of Object.values(node)) if (v && typeof v === "object") explicitIds(v, out);
+  }
+  return out;
+}
+
+const isStringList = (v) => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim());
 
 function editDistance(a, b) {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
@@ -666,12 +804,22 @@ function validate(recap, diff, recapDir) {
   const warn = (p, m) => warnings.push(`${p}: ${m}`);
   const byPath = new Map(diff.files.map((f) => [f.path, f]));
   const ids = new Set();
+  const declared = explicitIds(recap);
   const referencedFiles = new Set();
   const codeFiles = new Set();
   const screenshots = new Set();
-  const deferred = [];
+  const typesUsed = new Set();
+  const codeBlocks = [];
   const lineRefs = [];
-  let counter = 0;
+
+  // Generated ids come from the block's content, so inserting or reordering other blocks
+  // doesn't move a reviewer's saved comments onto a different block.
+  const autoId = (b) => {
+    const base = `b-${sha256(JSON.stringify(b, (k, v) => (k === "id" ? undefined : v))).slice(0, 7)}`;
+    let id = base;
+    for (let n = 2; ids.has(id) || declared.has(id); n++) id = `${base}-${n}`;
+    return id;
+  };
 
   const visible = (f, blk) => {
     // Lines shown by a diff block, honoring its `lines` / `hunks` selection.
@@ -712,12 +860,14 @@ function validate(recap, diff, recapDir) {
   const block = (b, p) => {
     if (!b || typeof b !== "object") return err(p, "block must be an object");
     if (!BLOCK_TYPES.has(b.type)) return err(p, `unknown block type "${b.type}" (valid: ${[...BLOCK_TYPES].join(", ")})`);
+    typesUsed.add(b.type);
     if (b.id !== undefined) {
+      if (typeof b.id !== "string" || !VALID_ID.test(b.id)) err(p, `id "${b.id}" must start with a letter and use only letters, digits, - and _`);
+      else if (isReservedId(b.id)) err(p, `id "${b.id}" is used by the page itself — pick another`);
       if (ids.has(b.id)) err(p, `duplicate id "${b.id}"`);
       ids.add(b.id);
     } else {
-      b.id = `b${++counter}`;
-      while (ids.has(b.id)) b.id = `b${++counter}`;
+      b.id = autoId(b);
       ids.add(b.id);
     }
     switch (b.type) {
@@ -764,14 +914,7 @@ function validate(recap, diff, recapDir) {
         if (path.isAbsolute(b.file) || b.file.split(/[\\/]/).includes("..")) return err(p, "`file` must be a path inside the repo, relative to its root");
         if (b.lines && (!Array.isArray(b.lines) || b.lines.length !== 2)) err(p, "`lines` must be [start, end]");
         codeFiles.add(b.file);
-        b._check = (len) => {
-          const [s, e] = b.lines || [1, len];
-          if (s < 1 || e > len || s > e) err(`${p}.lines`, `range ${s}-${e} is outside ${b.file} (${len} lines)`);
-          checkAnnotations(`${p}.annotations`, b.annotations, (a, ap) => {
-            if (a.line < s || a.line > e) err(ap, `line ${a.line} is outside the shown range ${s}-${e}`);
-            else if (Number.isInteger(a.to) && a.to > e) err(ap, `"to": ${a.to} is outside the shown range ${s}-${e}`);
-          });
-        };
+        codeBlocks.push({ b, p });
         break;
       }
       case "compare": {
@@ -804,7 +947,8 @@ function validate(recap, diff, recapDir) {
         if (typeof b.html !== "string") err(p, "wireframe needs `html`");
         if (b.surface && !SURFACES.has(b.surface)) err(p, `unknown surface "${b.surface}" (use ${[...SURFACES].join(", ")})`);
         if (typeof b.html === "string") {
-          if (/<(script|style|html|body|head|link)\b/i.test(b.html)) err(p, "wireframe html must not contain <script>, <style>, <html>, <body>, <head>, or <link>");
+          const tag = STRIPPED_TAGS.exec(b.html);
+          if (tag) err(p, `wireframe html can't use <${tag[1].toLowerCase()}>: the page removes it and everything inside it (use a <div>)`);
           if (/(?:color|background|border)[^;"']*#[0-9a-f]{3,8}\b/i.test(b.html)) warn(p, "wireframe uses hex colors — use var(--wf-*) tokens so it works in light and dark");
           if (/font-family/i.test(b.html)) warn(p, "wireframe sets font-family — the renderer owns fonts");
         }
@@ -825,7 +969,7 @@ function validate(recap, diff, recapDir) {
         break;
       case "diagram":
         if (typeof b.html !== "string") err(p, "diagram needs `html`");
-        else if (/<script\b/i.test(b.html)) err(p, "diagram html must not contain <script>");
+        else if (STRIPPED_TAGS.test(b.html)) err(p, `diagram html can't use <${STRIPPED_TAGS.exec(b.html)[1].toLowerCase()}>: the page removes it and everything inside it (put CSS in \`css\`)`);
         break;
       case "dataModel":
         if (!Array.isArray(b.entities) || !b.entities.length) return err(p, "dataModel needs `entities`");
@@ -878,21 +1022,33 @@ function validate(recap, diff, recapDir) {
     if (!["low", "medium", "high"].includes(recap.risk.level)) err("risk.level", 'must be "low", "medium", or "high"');
     if (!recap.risk.why) warn("risk.why", "say why in one line");
   }
-  if (recap.summary !== undefined && !Array.isArray(recap.summary)) err("summary", "must be an array of strings");
+  if (recap.summary !== undefined && !(Array.isArray(recap.summary) && recap.summary.every((x) => typeof x === "string"))) err("summary", "must be an array of strings");
   if (Array.isArray(recap.summary) && recap.summary.length === 0) warn("summary", "empty — add 2–5 bullets");
-  if (recap.focus !== undefined) {
-    if (!Array.isArray(recap.focus)) err("focus", "must be an array");
-    else
-      recap.focus.forEach((f, i) => {
-        if (!f.title) err(`focus[${i}]`, "needs `title`");
-        if (f.ref) checkRef(f.ref, `focus[${i}].ref`);
-      });
+  if (recap.questions !== undefined && !isStringList(recap.questions)) err("questions", "must be an array of non-empty strings");
+  if (recap.checks !== undefined) {
+    const c = recap.checks;
+    if (!c || typeof c !== "object" || Array.isArray(c)) err("checks", "must be an object with `verified` and/or `manual` arrays");
+    else {
+      if (c.verified !== undefined && !(Array.isArray(c.verified) && c.verified.every((v) => (typeof v === "string" && v.trim()) || (v && typeof v.text === "string" && v.text.trim()))))
+        err("checks.verified", 'must be an array of strings or { "text": "…", "cmd": "…" } objects');
+      if (c.manual !== undefined && !isStringList(c.manual)) err("checks.manual", "must be an array of non-empty strings");
+    }
   }
+  const sectionIds = new Set();
   (recap.sections || []).forEach((s, i) => {
     const sp = `sections[${i}]`;
     if (!s.title) err(sp, "section needs `title`");
     if (!Array.isArray(s.blocks)) return err(sp, "section needs `blocks`");
-    s.id ||= slugify(s.title || `section-${i}`);
+    if (s.id !== undefined) {
+      if (typeof s.id !== "string" || !VALID_ID.test(s.id)) err(`${sp}.id`, `"${s.id}" must start with a letter and use only letters, digits, - and _`);
+      else if (isReservedId(s.id) || sectionIds.has(s.id) || declared.has(s.id)) err(`${sp}.id`, `"${s.id}" is already used on the page`);
+    } else {
+      // Slug of the title, made unique against built-in sections, other sections, and block ids.
+      const base = String(s.title || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 50) || `section-${i + 1}`;
+      s.id = /^[a-z]/.test(base) ? base : `s-${base}`;
+      for (let n = 2; isReservedId(s.id) || sectionIds.has(s.id) || declared.has(s.id); n++) s.id = `${base}-${n}`;
+    }
+    sectionIds.add(s.id);
     s.blocks.forEach((b, j) => block(b, `${sp}.blocks[${j}]`));
   });
   if (!Array.isArray(recap.keyChanges)) {
@@ -916,16 +1072,28 @@ function validate(recap, diff, recapDir) {
       if (v && v.review && !["careful", "skim", "skip"].includes(v.review)) err(`files["${p}"].review`, 'must be "careful", "skim", or "skip"');
     }
   }
+  for (const id of sectionIds) if (ids.has(id)) err("sections", `section id "${id}" is also a block id`);
+
+  // Built-in sections exist only when they have content.
+  const builtIn = new Set(["files"]);
+  if ((recap.summary || []).length || (recap.focus || []).length) builtIn.add("overview");
+  if ((recap.keyChanges || []).length) builtIn.add("key-changes");
+  if ((recap.questions || []).length || (recap.checks?.verified || []).length || (recap.checks?.manual || []).length) builtIn.add("checks");
+  if (recap.focus !== undefined) {
+    if (!Array.isArray(recap.focus)) err("focus", "must be an array");
+    else
+      recap.focus.forEach((f, i) => {
+        if (!f || !f.title) err(`focus[${i}]`, "needs `title`");
+        if (f && f.ref) checkRef(f.ref, `focus[${i}].ref`);
+      });
+  }
 
   function checkRef(ref, p) {
     if (typeof ref !== "string") return err(p, "ref must be a string");
     if (ref.startsWith("#")) {
-      // checked after all ids are known
-      deferred.push(() => {
-        const id = ref.slice(1);
-        const sectionIds = new Set((recap.sections || []).map((s) => s.id));
-        if (!ids.has(id) && !sectionIds.has(id) && !["key-changes", "files", "checks", "overview"].includes(id)) err(p, `no block or section with id "${id}"`);
-      });
+      const id = ref.slice(1);
+      if (RESERVED_IDS.has(id) && !builtIn.has(id)) err(p, `"${ref}" isn't on this page (that section only appears when it has content)`);
+      else if (!ids.has(id) && !sectionIds.has(id) && !builtIn.has(id)) err(p, `no block or section with id "${id}"`);
       return;
     }
     const m = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(ref);
@@ -935,9 +1103,33 @@ function validate(recap, diff, recapDir) {
     }
     if (m[2]) lineRefs.push({ p, file: m[1], line: Number(m[3] || m[2]) });
   }
-  deferred.forEach((fn) => fn());
 
-  return { errors, warnings, referencedFiles, codeFiles, screenshots, lineRefs };
+  // Checks that need file contents; build calls this once they are loaded.
+  const finish = (contents) => {
+    const lineCount = (t) => (t.endsWith("\n") ? t.split("\n").length - 1 : t.split("\n").length);
+    for (const r of lineRefs) {
+      const f = byPath.get(r.file);
+      const t = contents[r.file];
+      if (f && f.status !== "deleted" && t != null && r.line > lineCount(t)) err(r.p, `line ${r.line} is past the end of ${r.file} (${lineCount(t)} lines)`);
+    }
+    for (const { b, p } of codeBlocks) {
+      const t = contents[b.file];
+      if (t == null) {
+        err(p, `cannot read ${b.file} at head`);
+        continue;
+      }
+      const len = lineCount(t);
+      const [s, e] = b.lines || [1, len];
+      if (s < 1 || e > len || s > e) err(`${p}.lines`, `range ${s}-${e} is outside ${b.file} (${len} lines)`);
+      checkAnnotations(`${p}.annotations`, b.annotations, (a, ap) => {
+        if (a.side === "old") err(ap, 'code blocks show the file at head — remove `"side": "old"`');
+        else if (a.line < s || a.line > e) err(ap, `line ${a.line} is outside the shown range ${s}-${e}`);
+        else if (Number.isInteger(a.to) && a.to > e) err(ap, `"to": ${a.to} is outside the shown range ${s}-${e}`);
+      });
+    }
+  };
+
+  return { errors, warnings, referencedFiles, codeFiles, screenshots, typesUsed, finish };
 }
 
 function selectHunks(f, blk) {
@@ -952,24 +1144,6 @@ function selectHunks(f, blk) {
 
 // ───────────────────────────────────────────────────────────── build
 
-function readHeadFile(diff, p) {
-  if (path.isAbsolute(p) || p.split(/[\\/]/).includes("..")) return null;
-  if (diff.head.worktree) {
-    const abs = path.join(diff.root, p);
-    try {
-      const st = fs.statSync(abs);
-      if (!st.isFile()) return null;
-      if (st.size > MAX_EMBED_FILE_BYTES) return null;
-      return fs.readFileSync(abs, "utf8");
-    } catch {
-      return null;
-    }
-  }
-  const size = git(["cat-file", "-s", `${diff.head.sha}:${p}`], { cwd: diff.root, allowFail: true });
-  if (!size || Number(size) > MAX_EMBED_FILE_BYTES) return null;
-  return git(["show", `${diff.head.sha}:${p}`], { cwd: diff.root, allowFail: true });
-}
-
 const looksBinary = (s) => s.includes("\u0000");
 
 function build(opts) {
@@ -977,21 +1151,22 @@ function build(opts) {
   const diff = readJSON(path.join(dir, "diff.json"), "diff.json (run `collect` first)");
   const recap = normalizeText(readJSON(path.join(dir, "recap.json"), "recap.json"));
 
-  const { errors, warnings, referencedFiles, codeFiles, screenshots, lineRefs } = validate(recap, diff, dir);
+  const { errors, warnings, referencedFiles, codeFiles, screenshots, typesUsed, finish } = validate(recap, diff, dir);
 
-  // Staleness check: has the code moved since collect? (Same patch recipe as collect,
-  // untracked files included.)
+  // Has the code moved since collect? (Same patch recipe as collect, untracked files included.)
   let stale = false;
-  if (diff.patchSpec) {
+  const repoHere = fs.existsSync(diff.root);
+  if (!repoHere) warnings.push(`repo: ${diff.root} no longer exists — file contents for context expansion are not embedded`);
+  else {
     try {
-      stale = sha256(computePatch(diff.root, diff.patchSpec).patch) !== diff.fingerprint;
-    } catch {
-      /* repo moved or unavailable — skip the check */
+      if (diff.patchSpec) stale = sha256(computePatch(diff.root, diff.patchSpec).patch) !== diff.fingerprint;
+      if (!diff.head.worktree && !diff.pr && diff.head.ref !== "HEAD") {
+        const headNow = revParse(diff.root, diff.head.ref);
+        if (headNow && headNow !== diff.head.sha) warnings.push(`head: ${diff.head.ref} has moved since collect (${diff.head.sha.slice(0, 8)} → ${headNow.slice(0, 8)}) — rerun collect to include new commits`);
+      }
+    } catch (e) {
+      warnings.push(`repo: could not compare with git (${e.message.split("\n")[0]}) — skipped the staleness check`);
     }
-  }
-  if (!diff.head.worktree && !diff.pr) {
-    const headNow = revParse(diff.root, diff.head.ref);
-    if (headNow && headNow !== diff.head.sha && diff.head.ref !== "HEAD") warnings.push(`head: ${diff.head.ref} has moved since collect (${diff.head.sha.slice(0, 8)} → ${headNow.slice(0, 8)}) — rerun collect to include new commits`);
   }
   if (stale) warnings.push("diff: the working tree changed since collect — rerun collect so the review matches the code");
 
@@ -999,39 +1174,17 @@ function build(opts) {
   const redact = makeRedactor();
   const contents = {};
   let total = 0;
+  const head = { sha: diff.head.sha, worktree: diff.head.worktree };
   const wanted = [...referencedFiles, ...codeFiles];
   for (const f of diff.files) if (!f.generated && !f.binary && f.status !== "deleted") wanted.push(f.path);
-  for (const p of [...new Set(wanted)]) {
+  for (const p of repoHere ? [...new Set(wanted)] : []) {
     if (total > MAX_EMBED_TOTAL_BYTES && !codeFiles.has(p)) continue;
-    const text = readHeadFile(diff, p);
-    if (text == null || looksBinary(text)) {
-      if (codeFiles.has(p)) errors.push(`code block: cannot read ${p} at head`);
-      continue;
-    }
-    redact.reset();
-    contents[p] = text.split("\n").map((l) => redact(l, p)).join("\n");
+    const text = readFileAt(diff.root, head, p);
+    if (text == null || looksBinary(text)) continue;
+    contents[p] = redactText(text, p, redact);
     total += text.length;
   }
-  const lineCount = (t) => {
-    const n = t.split("\n").length;
-    return t.endsWith("\n") ? n - 1 : n;
-  };
-  for (const r of lineRefs) {
-    const f = diff.files.find((x) => x.path === r.file);
-    const t = contents[r.file];
-    if (f && f.status !== "deleted" && t != null && r.line > lineCount(t)) errors.push(`${r.p}: line ${r.line} is past the end of ${r.file} (${lineCount(t)} lines)`);
-  }
-  // Validate `code` block ranges now that contents are known.
-  const walk = (b) => {
-    if (!b || typeof b !== "object") return;
-    if (b.type === "code" && b._check && contents[b.file] != null) b._check(lineCount(contents[b.file]));
-    delete b._check;
-    for (const v of Object.values(b)) {
-      if (Array.isArray(v)) v.forEach(walk);
-      else if (v && typeof v === "object") walk(v);
-    }
-  };
-  walk(recap);
+  finish(contents);
 
   for (const w of warnings) process.stderr.write(`  warn   ${w}\n`);
   for (const e of errors) process.stderr.write(`  error  ${e}\n`);
@@ -1050,22 +1203,21 @@ function build(opts) {
     assets[src] = `data:${mime};base64,${fs.readFileSync(abs).toString("base64")}`;
   }
 
-  const json = JSON.stringify(recap);
-  const needs = {
-    mermaid: json.includes('"type":"mermaid"'),
-    rough: json.includes('"type":"wireframe"'),
-  };
+  const needs = { mermaid: typesUsed.has("mermaid"), rough: typesUsed.has("wireframe") };
 
   const data = {
     recap,
     diff: { ...diff, root: undefined, patchSpec: undefined },
     contents,
     assets,
-    meta: { builtAt: new Date().toISOString(), version: VERSION, stale },
+    meta: { builtAt: new Date().toISOString(), version: VERSION, stale, types: [...typesUsed], contentRedactions: redact.count() },
   };
 
   const read = (p) => fs.readFileSync(path.join(ASSETS, p), "utf8");
-  const scriptSafe = (s) => s.replace(/<\/(script)/gi, "<\\/$1").replace(/<!--/g, "<\\!--");
+  // Keep the HTML parser from ending or re-entering an inline script early. The replacements
+  // must mean the same thing inside JS strings AND regexes — including `u`-flag regexes, where
+  // an escape like `\!` is a syntax error — so `!` becomes the hex escape `\x21`.
+  const scriptSafe = (s) => s.replace(/<\/(script)/gi, "<\\/$1").replace(/<!--/g, "<\\x21--");
   const font = fs.readFileSync(path.join(ASSETS, "vendor", "architects-daughter.woff2")).toString("base64");
 
   const vendor = [read("vendor/highlight.min.js"), read("vendor/marked.min.js")];
@@ -1089,6 +1241,7 @@ function build(opts) {
   fs.writeFileSync(outFile, html);
   const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
   process.stdout.write(`human-review: wrote ${outFile} (${kb} KB${warnings.length ? `, ${warnings.length} warning(s)` : ""})\n`);
+  if (redact.count()) process.stdout.write(`  ${redact.count()} secret-looking value(s) redacted from embedded file contents\n`);
   if (opts.open) openFile(outFile);
 }
 
@@ -1117,13 +1270,24 @@ build    Validates <dir>/recap.json against the diff and writes <dir>/review.htm
 open     Opens a built review in the default browser.
 `;
 
-const opts = parseArgs(process.argv.slice(2));
-const cmd = opts._[0];
-if (!cmd || opts.help || cmd === "help") process.stdout.write(HELP);
-else if (cmd === "collect") collect(opts);
-else if (cmd === "build") build(opts);
-else if (cmd === "check") build({ ...opts, check: true });
-else if (cmd === "open") {
-  const t = path.resolve(opts._[1] || ".");
-  openFile(fs.statSync(t).isDirectory() ? path.join(t, "review.html") : t);
-} else die(`unknown command "${cmd}"\n\n${HELP}`);
+function main() {
+  const opts = parseArgs(process.argv.slice(2));
+  const cmd = opts._[0];
+  if (!cmd || opts.help || cmd === "help") process.stdout.write(HELP);
+  else if (cmd === "collect") collect(opts);
+  else if (cmd === "build") build(opts);
+  else if (cmd === "check") build({ ...opts, check: true });
+  else if (cmd === "open") {
+    const t = path.resolve(opts._[1] || ".");
+    if (!fs.existsSync(t)) die(`not found: ${t}`);
+    openFile(fs.statSync(t).isDirectory() ? path.join(t, "review.html") : t);
+  } else die(`unknown command "${cmd}"\n\n${HELP}`);
+}
+
+try {
+  main();
+} catch (e) {
+  if (!(e instanceof CliError)) throw e;
+  process.stderr.write(`human-review: ${e.message}\n`);
+  process.exit(e.code);
+}
