@@ -62,8 +62,10 @@ It prints the file list and writes three files to `<repo>/.human-review/<branch>
 - `diff.json`: the machine form the build uses. Don't edit it.
 - `recap.json`: a skeleton with every changed file pre-listed. You fill it in.
 
-If `recap.json` already exists from an earlier run, `collect` leaves it alone.
-Update it rather than starting over.
+If `recap.json` already exists from an earlier run of *this* change, `collect`
+leaves it alone. Update it rather than starting over. If it describes a
+different change (or you didn't write it and it doesn't match the diff), move it
+aside and write a fresh one.
 
 ### 3. Read the change
 
@@ -176,6 +178,9 @@ fixate on what it flagged and miss the rest. So the page holds back your
   `questions`, `checks`, and the CLI's security cues (a fixed question computed
   from the diff, not your opinion).
 
+If every changed file is mechanical or generated, there is nothing to read
+first, so nothing is held back.
+
 Write the visible parts **descriptively**: what changed, how it works, where to
 look. Put what you *concluded* (bugs, sharp edges, doubts) only in the held-back
 fields. A visible caption that says "choosing Never still produces a 7-day
@@ -200,13 +205,15 @@ and Never" doesn't.
   links may never expire"), a second opinion on one area ("Check the lock order in
   `queue.ts`; I couldn't test it under load"), or the depth that fits ("A skim
   is enough: a rename plus tests"). Describe what you want; don't state what you
-  found. Anything that needs a written answer also goes in `questions`.
+  found. Don't repeat a `questions` item here; if you have questions, `ask` can
+  just say so ("Answer the two policy questions below").
 - **`focus`**: the suggested reading order, three to six stops. Each stop is a
   short title, a why ("check how…", "this is where…"), and a `ref` to
   `path:line` or `#block-id`. This is the most valuable thing on the page. Put
   the riskiest or most consequential thing first. Name the *area and what to
-  check*, not your verdict: "How the `ttlDays` default is chosen", not "Expiry
-  default swallows Never". The verdict goes in a `risk` annotation, which the
+  check*, not your verdict or any mechanism that implies a flaw: "How the
+  `ttlDays` default is chosen", not "Expiry default swallows Never" and not
+  "which lines are skipped before matching". The verdict goes in a `risk` annotation, which the
   reviewer sees after their own look.
 - **`concerns`**: every changed file, grouped by **what it does together**, in
   reading order. A concern is a named slice of the change ("Token storage and
@@ -245,13 +252,14 @@ and Never" doesn't.
 - **`tests`**: `covers` and `doesNotCover`, each a short list of facts a reviewer
   can check against the test files: "Tests create, list, and revoke a link
   through the real handlers" and "No test sends an expired token". These are
-  always visible, so keep them to what the tests do. A behavior the change adds
-  that no test exercises belongs in `doesNotCover` only as a plain fact. A bug
-  you suspect belongs in a `risk` annotation. If there are no tests, write
+  always visible, so keep them to what the tests do. `doesNotCover` is for
+  plain gaps you have *not* already turned into a finding: if the missing test
+  points at a bug or doubt you hold back as a `risk` or `question` annotation,
+  leave it out of `tests` entirely. If there are no tests, write
   `"doesNotCover": ["No tests were added or changed"]`.
 - **`notExamined`**: what you did not look at or could not run: callers outside
   the diff, a migration on real data, behavior under load, the UI in a browser.
-  Be concrete. The page shows it only after the reviewer's pass, under "Before
+  Be concrete ("ran no tests" and "didn't run the app" belong here). The page shows it only after the reviewer's pass, under "Before
   you sign off", next to an "Anything else?" box. Leave it empty only if you
   really looked at everything the change touches.
 
@@ -269,7 +277,9 @@ legible.
   - `risk`: a bug, a sharp edge, or a missing check. Be specific about the
     failure and suggest the fix. *Held back until the reviewer's own pass.*
   - `question`: you aren't sure. Don't guess silently. *Held back.*
-  - `decision`: a deliberate tradeoff the reviewer should agree with.
+  - `decision`: a deliberate tradeoff the reviewer should agree with, visible
+    from the start. Behavior that surprises you, or that you can't tell is
+    intended, is a held-back `question` instead.
   - `note`: context: what the line is for, what it interacts with.
   - `praise`: use sparingly, for something genuinely worth copying. *Held back.*
 
@@ -283,16 +293,24 @@ legible.
 ### Security cues
 
 When a hunk's added lines touch access control, authentication, SQL built from
-strings, deserialization, crypto, or a shell or `eval` call (or a removed line
-mentions a check), `collect` marks one line in it and the page asks one specific
-question there: "Is `canShare` applied on every path that reaches this code?"
-Cues are rare (at most five per change, one per hunk) and fixed. You can't edit
-or silence them, and the PR text can't either. For each `⚑` in `review.txt`:
+strings, deserialization, crypto (including weak hashes and `Math.random` for
+tokens), TLS verification switched off, relaxed cookie flags, or a shell or
+`eval` call (or a removed line mentions a check), `collect` marks one line in it
+and the page asks one specific question there: "Is `canShare` applied on every
+path that reaches this code?" Cues are rare (one per hunk, two per file, five per
+change) and fixed. You can't edit or silence them, and the PR text can't either.
+Tests, docs, JSON, lockfiles, generated files, and moved lines are skipped. For
+each `⚑` in `review.txt`:
 
 - Read the code around it and answer the question for yourself.
 - If you find a real problem, add a `risk` annotation on that line saying what
   breaks and how to fix it. Don't copy the cue's wording.
 - If it's fine, say nothing. Don't annotate to say "this is OK".
+- If the line plainly isn't the code the cue assumes (a string in a data file, a
+  table of patterns), a visible `note` annotation that says what the line *is*
+  is fine. Describe it; don't rule on safety.
+- A cue on a file you left out of `keyChanges` still shows in All files. You
+  don't need to promote the file.
 - A security issue the scan missed still gets a `risk` annotation or a
   `security` callout (both held back).
 
@@ -343,14 +361,17 @@ Rules for visuals:
   the finding goes in a held-back `question` or `risk` annotation. The page has
   an **Answer** box for each one.
 - **`checks.verified`**: only what you **actually ran or confirmed in this
-  session**. Add `cmd` only when the reviewer could rerun it from the repo root
+  session**, and only results that came out fine. It's always visible, so a
+  probe that revealed a problem goes in a held-back `risk` annotation, not here. Add `cmd` only when the reviewer could rerun it from the repo root
   (`{"text": "...", "cmd": "npm test"}`); describe ad-hoc probes in `text`
   instead. If you ran nothing, leave it empty. Reading the code isn't
   verification; what you concluded from reading belongs in annotations. Never
   imply verification you didn't do.
 - **`checks.manual`**: two to five concrete things a human should try, written
   as steps that don't give away what you expect them to find. The reviewer can
-  tick them off.
+  tick them off. Name an action, not the unusual input that triggers a suspected
+  bug. Leaky: "Create a link with Never and notice it still expires." Safe:
+  "Create a link with Never selected and note the expiry it shows."
 
 ### Precision check
 
@@ -361,7 +382,8 @@ that fails:
 
 1. **Supported by the diff?** Point to the `review.txt` line that makes it true.
    If it depends on code outside the diff, read that code and show it in a `code`
-   block, or drop the claim. In one production study, about one in five
+   block if the reviewer needs to see it; otherwise drop the claim, or move it to
+   `notExamined` if it's something you couldn't check. In one production study, about one in five
    AI review comments made claims the diff didn't support.
 2. **Actionable?** It must tell the reviewer what to check or decide, or explain
    a *why* the code can't show. Otherwise drop it.
@@ -370,6 +392,9 @@ that fails:
    in a held-back kind. Reword anything visible that gives a verdict away.
 5. **Worth the reviewer's trust?** One wrong or noisy note makes them discount
    the rest. Silence beats a weak note, and a file with no annotations is fine.
+
+Also re-open every `path:line` you cite in prose (focus, summaries, notes):
+`build --check` verifies annotation lines but not what a prose citation says.
 
 Then run `build --check`.
 

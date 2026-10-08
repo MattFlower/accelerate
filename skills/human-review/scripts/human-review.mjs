@@ -431,7 +431,7 @@ function suggestConcerns(files) {
 // diff, so nothing in a PR description can steer or silence it.
 const SEC_MAX = 5;
 const SEC_PER_FILE = 2;
-const SEC_SKIP = /\.(md|mdx|markdown|txt|rst|adoc|lock|lockb|sum|svg|snap)$|(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|npm-shrinkwrap\.json|cargo\.lock|gemfile\.lock|poetry\.lock|go\.sum)$/i;
+const SEC_SKIP = /\.(md|mdx|markdown|txt|rst|adoc|json|csv|tsv|lock|lockb|sum|svg|snap)$|(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|npm-shrinkwrap\.json|cargo\.lock|gemfile\.lock|poetry\.lock|go\.sum)$/i;
 const COMMENT_LINE = /^\s*(\/\/|#|\*|\/\*|<!--|--\s|;|import\b|from\s+\S+\s+import\b|export\s*(\{|\*)|using\b|use\s|require\b|#include)/;
 const SEC_RULES = [
   { cat: "injection", rank: 2, re: /(?<![.\w])exec\s*\(|\bchild_process\.exec\s*\(|\bexecSync\s*\(|\beval\s*\(|\bnew Function\s*\(|\bos\.(?:system|popen)\s*\(|dangerouslySetInnerHTML|\.innerHTML\s*=(?!=)|\bdocument\.write\s*\(|\bshell\s*=\s*True/, cue: (id) => `Can anything from outside the program reach \`${id}\`?` },
@@ -441,7 +441,9 @@ const SEC_RULES = [
   { cat: "weak-hash", rank: 5, re: /createHash\(\s*["'](?:md5|sha1)["']|hashlib\.(?:md5|sha1)\b/, id: () => "", cue: () => "Is a weak hash (MD5 or SHA-1) acceptable for what this one protects?" },
   { cat: "crypto", rank: 5, re: /\b(?:createHmac|createCipheriv|createDecipheriv|createSign|createVerify|timingSafeEqual|bcrypt|scrypt|argon2|pbkdf2)\b|\bsubtle\.(?:sign|verify|encrypt|decrypt|deriveKey|deriveBits)\b/i, cue: (id) => `Are the algorithm, key source and comparison in \`${id}\` sound?` },
   { cat: "randomness", rank: 5, re: /\bMath\.random\(\)|\brandom\.random\(\)/, also: /token|secret|nonce|session|password|salt|otp|api[_-]?key/i, cue: (id) => `Is \`${id}\` acceptable for a value that works as a token or secret?` },
-  { cat: "access", rank: 6, re: /\b(?:isAdmin|is_admin|isOwner|is_owner|isSuperuser|is_superuser|hasRole|has_role|hasPermission|has_permission|checkPermission|check_permission|requireRole|requirePermission|permission_required|login_required|canActivate|can[A-Z]\w*)\b/, cue: (id) => `Is \`${id}\` applied on every path that reaches this code, and does it deny by default?` },
+  { cat: "access", rank: 6, re: /\b(?:isAdmin|is_admin|isOwner|is_owner|isSuperuser|is_superuser|hasRole|has_role|hasPermission|has_permission|checkPermission|check_permission|requireRole|requirePermission|permission_required|login_required|canActivate)\b/, cue: (id) => `Is \`${id}\` applied on every path that reaches this code, and does it deny by default?` },
+  // canX(...) is too common a name (canRetry, canUseDOM) to count without a sign it's about people.
+  { cat: "access", rank: 6, re: /\bcan[A-Z]\w*\b/, also: /\b(?:user|role|perm\w*|owner|admin|member|session|auth\w*|acl|policy|forbidden|denied|403|401|ability|principal|actor)\b/i, cue: (id) => `Is \`${id}\` applied on every path that reaches this code, and does it deny by default?` },
   { cat: "cookie", rank: 7, re: /\b(?:httpOnly|secure|sameSite)\s*[:=]\s*(?:false|["']none["'])/i, cue: () => "Why is this cookie flag relaxed?" },
   { cat: "auth", rank: 7, re: /\b(?:authenticat\w*|authoris\w*|authoriz\w*|oauth2?|csrf|xsrf|saml|jwt|bearer|isAuthenticated|is_authenticated|requireAuth|require_auth)\b/i, cue: (id) => `Does the handling of \`${id}\` here cover every request that needs it?` },
 ];
@@ -452,7 +454,7 @@ const SEC_GUARD = /\b(?:authoriz\w*|authoris\w*|authenticat\w*|isAdmin|hasPermis
 function secMatch(rule, s) {
   const m = rule.re.exec(s);
   if (!m || (rule.also && !rule.also.test(s))) return null;
-  return (rule.id ? rule.id() : m[0].replace(/\s*[(:=].*$/, "")).trim();
+  return (rule.id ? rule.id() : m[0].replace(/\s*[(=]$/, "")).trim();
 }
 
 function markSecurityCues(files) {
@@ -466,9 +468,9 @@ function markSecurityCues(files) {
       };
       const addedText = h.lines.filter((l) => l.t === "+").map((l) => l.s.toLowerCase()).join("\n");
       for (const l of h.lines) {
-        if (l.t === " " || COMMENT_LINE.test(l.s) || l.s.length > 400) continue;
+        if (l.t === " " || l.mv || COMMENT_LINE.test(l.s) || l.s.length > 400) continue; // moved lines aren't new
         if (l.t === "-") {
-          const m = !l.mv && SEC_GUARD.exec(l.s);
+          const m = SEC_GUARD.exec(l.s);
           if (m && !addedText.includes(m[0].toLowerCase()))
             claim(1, { cat: "removed-check", side: "old", line: l.o, text: `This hunk removes a check that mentions \`${m[0]}\`. Does an equivalent check still run on this path?` });
           continue;
@@ -487,15 +489,16 @@ function markSecurityCues(files) {
   });
   // Keep the strongest few across the whole change; say nothing about the rest.
   const perFile = new Map();
-  found
-    .sort((a, b) => a.best.rank - b.best.rank || a.fi - b.fi || a.hi - b.hi)
-    .forEach(({ fi, hi, best }, n) => {
-      const used = perFile.get(fi) || 0;
-      if (n >= SEC_MAX || used >= SEC_PER_FILE) return;
-      perFile.set(fi, used + 1);
-      const { rank, ...cue } = best;
-      files[fi].hunks[hi].sec = cue;
-    });
+  let kept = 0;
+  for (const { fi, hi, best } of found.sort((a, b) => a.best.rank - b.best.rank || a.fi - b.fi || a.hi - b.hi)) {
+    if (kept >= SEC_MAX) break;
+    const used = perFile.get(fi) || 0;
+    if (used >= SEC_PER_FILE) continue;
+    perFile.set(fi, used + 1);
+    kept++;
+    const { rank, ...cue } = best;
+    files[fi].hunks[hi].sec = cue;
+  }
 }
 
 function linguistGenerated(root, paths) {
@@ -1312,7 +1315,7 @@ function validate(recap, diff, recapDir) {
     else {
       for (const k of Object.keys(t)) if (k !== "covers" && k !== "doesNotCover") warn(`tests.${k}`, "unknown key (ignored)");
       for (const k of ["covers", "doesNotCover"]) if (t[k] !== undefined && !isStringList(t[k])) err(`tests.${k}`, "must be an array of non-empty strings");
-      if (!(t.covers || []).length && !(t.doesNotCover || []).length) warn("tests", "empty — say what the tests cover and what they don't, or that there are none");
+      if (!(t.covers || []).length && !(t.doesNotCover || []).length && diff.files.length > 2) warn("tests", "empty — say what the tests cover and what they don't, or that there are none");
     }
   } else if (diff.files.length > 2) warn("tests", "missing — say what the tests cover and what they don't (or that there are none)");
   if (recap.checks !== undefined) {
