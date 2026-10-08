@@ -577,6 +577,7 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
 
   const hits = new Map();
   for (const f of live) {
+    if (f.language === "markdown" || /\.(txt|rst|adoc)$/i.test(f.path)) continue; // docs about auth aren't auth code
     const segs = f.path.toLowerCase().split("/");
     for (const [label, words] of Object.entries(SENSITIVE_WORDS)) {
       const hit = segs.some((seg, i) => {
@@ -591,7 +592,7 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
       id: "paths",
       tag: "verified",
       via: "file paths",
-      text: `Touches paths named for ${[...hits].map(([label, ps]) => `${label} (${ps.length})`).join(", ")}.`,
+      text: `Path names suggest ${[...hits].map(([label, ps]) => `${label} (${ps.length})`).join(", ")}.`,
       files: shortList([...new Set([...hits.values()].flat())], 4),
     });
 
@@ -605,15 +606,19 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
   const baseDateStr = (gitQuiet(["log", "-1", "--format=%cI", baseSha], { cwd: root, timeout: 5000 }) || "").trim();
   if (!baseDateStr) return (noHistory("the base commit's date couldn't be read"), out);
   const baseDate = new Date(baseDateStr);
-  const since = isoDay(new Date(baseDate.getTime() - HISTORY_DAYS * 86400_000));
-  const fixSince = isoDay(new Date(baseDate.getTime() - FIX_DAYS * 86400_000));
+  // Never claim a window longer than the repository's own history.
+  const rootDay = (gitQuiet(["log", "--max-parents=0", "--format=%cI", baseSha], { cwd: root, timeout: 5000 }) || "").split("\n").filter(Boolean).map((d) => d.slice(0, 10)).sort()[0] || "";
+  const windowStart = isoDay(new Date(baseDate.getTime() - HISTORY_DAYS * 86400_000));
+  const since = rootDay > windowStart ? rootDay : windowStart;
+  const fixStart = isoDay(new Date(baseDate.getTime() - FIX_DAYS * 86400_000));
+  const fixSince = rootDay > fixStart ? rootDay : fixStart;
   const baseDay = isoDay(baseDate);
   const authors = changeAuthors(root, { logRange, worktree });
 
   const histPath = (f) => f.oldPath || f.path;
   const paths = [...new Set(existing.sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions)).map(histPath))].slice(0, MAX_HISTORY_PATHS);
   const raw = gitQuiet(
-    ["--literal-pathspecs", "log", baseSha, "--no-merges", "--no-renames", "--no-show-signature", `--since=${since}`, "--format=%x1e%aN%x1f%aE%x1f%aI%x1f%s", "--name-only", "--", ...paths],
+    ["--literal-pathspecs", "log", baseSha, "--no-merges", "--no-renames", "--no-show-signature", `--since=${isoDay(new Date(new Date(since).getTime() - 86400_000))}`, "--format=%x1e%aN%x1f%aE%x1f%aI%x1f%s", "--name-only", "--", ...paths],
     { cwd: root },
   );
   if (raw === null) return (noHistory("reading history timed out or failed"), out);
@@ -622,6 +627,7 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
     const [head, ...rest] = rec.split("\n");
     const [name, email, date, subject] = head.split("\x1f");
     const c = { key: (email || "").toLowerCase(), name, day: (date || "").slice(0, 10), subject: subject || "" };
+    if (c.day < since) continue; // the git bound is a day early, to dodge time-zone edges
     for (const p of rest) if (p) (hist.get(p) || hist.set(p, []).get(p)).push(c);
   }
   const by = (f) => hist.get(histPath(f)) || [];
@@ -654,7 +660,10 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
         id: "ownership",
         tag: "verified",
         via: "git history by path; renames before this change aren't followed",
-        text: `Most earlier commits to ${owned.length === 1 ? "one file" : `${owned.length} files`} are someone else's: ${shortList(owned).map((o) => `${plainName(o.top.name)} wrote ${Math.round((o.top.n / o.total) * 100)}% of ${o.total} commits to \`${path.basename(o.f.path)}\``).join("; ")} (since ${since}).`,
+        text:
+          owned.length === 1
+            ? `${plainName(owned[0].top.name)} wrote ${Math.round((owned[0].top.n / owned[0].total) * 100)}% of ${owned[0].total} earlier commits to \`${path.basename(owned[0].f.path)}\`, not the author (since ${since}).`
+            : `${owned.length} changed files have a main author other than this change's: ${shortList(owned).map((o) => `${plainName(o.top.name)} wrote ${Math.round((o.top.n / o.total) * 100)}% of ${o.total} commits to \`${path.basename(o.f.path)}\``).join("; ")} (since ${since}).`,
         files: shortList(owned.map((o) => o.f.path)),
         cmd: `git shortlog -sn --no-merges --since=${since} ${baseSha.slice(0, 10)} -- <file>`,
       });
@@ -1134,7 +1143,10 @@ function renderReviewText(diff) {
     out.push("#");
     out.push("# Signals computed from git and file paths (never from the PR text). The page shows them too;");
     out.push("# use them to calibrate risk.level and the reading order, don't restate them:");
-    for (const i of sig.items) out.push(`#   [${i.tag}] ${i.text.replace(/`/g, "")}${i.files ? `  (${i.files.join(", ")})` : ""}`);
+    for (const i of sig.items) {
+      out.push(`#   [${i.tag}] ${i.text.replace(/`/g, "")}${i.files ? `  (${i.files.join(", ")})` : ""}`);
+      if (i.cmd) out.push(`#       reproduce: ${i.cmd}`);
+    }
     for (const n of sig.notes) out.push(`#   (${n})`);
   }
   out.push("");

@@ -77,7 +77,8 @@ authentication, SQL, deserialization, crypto, or a shell or `eval` call may carr
 a line like `⚑ check this for security (line 42): …`. The page shows the same
 question to the reviewer at that line. Look at the spot yourself (see "Security
 cues" below). The header of `review.txt` also lists **signals**: facts the CLI computed from
-git history and file paths (see "Signals" below). Open surrounding source when a hunk doesn't make sense
+git history and file paths (see "Signals" below; read it before you choose
+`risk.level`). Open surrounding source when a hunk doesn't make sense
 on its own: callers, types, the rest of a component. Read the commit messages
 and the PR description (`--pr` includes it in `diff.json`).
 
@@ -332,7 +333,11 @@ file. A row appears only when it says something, and there is no score.
 - You can't edit them, and there's no recap field for them. Don't restate them.
 - Use them to calibrate `risk.level` and the order of `focus`: a first-time
   author in a path named for auth deserves a closer look than the same diff
-  from the file's owner. If you disagree with a signal, say so in `risk.why`.
+  from the file's owner. A signal may lift the level by one step above what the
+  diff alone suggests (low to medium), but it can't take a small diff to `high`
+  by itself. In `risk.why`, mention a signal only to say what it means for this
+  diff or to say you disagree with it; don't just repeat it.
+- A "path names suggest…" row is a name match only, not a finding about the code.
 - Your own `risk.why` is shown tagged **inference**.
 - Signals are left out, with a note, on a shallow clone or when history can't be
   read in time. Don't fill the gap by guessing.
