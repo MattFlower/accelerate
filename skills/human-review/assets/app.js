@@ -2061,13 +2061,20 @@ ul, ol { margin: 0; padding-left: 18px; }
         slot.replaceChildren(
           blockFindingHidden(RISK_KEY)
             ? h("div", { class: "risk held-risk" }, h("span", { class: "level" }, "Agent's risk read"), h("span", null, "Held back until you've formed your own. ", h("button", { type: "button", class: "linklike", onclick: () => revealBlock(RISK_KEY) }, "Show it")))
-            : h("div", { class: `risk ${lv}` }, h("span", { class: "level" }, `${lv[0].toUpperCase()}${lv.slice(1)} risk`), recap.risk.why ? md(recap.risk.why, { inline: true }) : null),
+            : h(
+                "div",
+                { class: `risk ${lv}` },
+                h("span", { class: "level" }, `${lv[0].toUpperCase()}${lv.slice(1)} risk`),
+                recap.risk.why ? [tagChip("inference"), md(recap.risk.why, { inline: true })] : null,
+              ),
         );
       findingWatchers.add(draw);
       draw();
       facts.append(slot);
     }
     hero.append(facts);
+    const sig = renderSignals();
+    if (sig) hero.append(sig);
     if (countFindings()) {
       const notice = h("div");
       const draw = () => {
@@ -2111,6 +2118,47 @@ ul, ol { margin: 0; padding-left: 18px; }
       hero.append(notice);
     }
     return hero;
+  }
+
+  // Provenance of a claim: computed from git or paths, taken from commit wording, or the agent's reading.
+  const TAGS = {
+    verified: "Computed from git history or file paths. The command that reproduces it is in the row's tooltip.",
+    "author text": "Counted from git, but classified by what earlier commit messages say.",
+    inference: "The agent's own reading of the diff. Not computed.",
+  };
+  const tagChip = (tag, title) => h("span", { class: `tag ${tag.replace(" ", "-")}`, title: title || TAGS[tag] }, tag);
+
+  // Facts computed from git and paths (never from the PR text), shown beside the risk read as its checkable reasons.
+  function renderSignals() {
+    const sg = diff.signals;
+    const items = sg && Array.isArray(sg.items) ? sg.items : [];
+    const notes = sg && Array.isArray(sg.notes) ? sg.notes : [];
+    if (!items.length && !notes.length) return null;
+    const ul = h(
+      "ul",
+      null,
+      items.map((i) =>
+        h(
+          "li",
+          null,
+          tagChip(i.tag, `${TAGS[i.tag] || ""} Source: ${i.via || "git"}.${i.cmd ? ` Reproduce: ${i.cmd}` : ""}`),
+          h(
+            "span",
+            null,
+            md(i.text, { inline: true }),
+            i.quote ? [" ", h("q", null, i.quote)] : null,
+            (i.files || []).filter((p) => !i.text.includes(splitPath(p)[1])).map((p) => [" ", h("a", { href: "#", class: "hr-ref", dataset: { ref: p } }, h("code", null, splitPath(p)[1]))]),
+          ),
+        ),
+      ),
+    );
+    return h(
+      "div",
+      { class: "signals", id: "signals" },
+      h("h3", null, "From git"),
+      ul,
+      notes.map((n) => h("p", { class: "signals-note" }, n)),
+    );
   }
 
   function renderOverview() {

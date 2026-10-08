@@ -501,6 +501,184 @@ function markSecurityCues(files) {
   }
 }
 
+// ───────────────────────────────────────────────────────────── risk signals
+//
+// Facts a reviewer can check, computed from git and file paths only. They never read the PR
+// title or description, or the messages of the commits under review, so what the author wrote
+// can't steer them. Each carries a provenance tag: "verified" (git history or file paths, with
+// the command that reproduces it) or "author text" (earlier commit messages, classified by
+// wording). No score is computed and `risk.level` is never touched: research on defect
+// prediction finds the reasons help reviewers more than a number does, and the models drift.
+const HISTORY_DAYS = 730;
+const FIX_DAYS = 365;
+const HISTORY_TIMEOUT_MS = 20_000;
+const MAX_HISTORY_PATHS = 400;
+const NOT_A_PERSON = /\[bot\]|^(?:dependabot|renovate|github-actions|greenkeeper|snyk)\b/i;
+const FIX_COMMIT = /^(?:fix|bugfix|hotfix)(?:\([^)]*\))?!?:|^revert\b|\b(?:fix(?:e[sd]|ing)?|bug ?fix(?:e[sd])?|hotfix|regressions?|crash(?:es|ed)?)\b/i;
+const NOT_A_FIX = /\b(?:typos?|lint(?:ing)?|format(?:ting)?|prettier|whitespace|spelling|comments?|docs?|readme|changelog|ci|flaky|snapshots?)\b/i;
+const NON_CODE_LANG = new Set(["json", "yaml", "markdown", "css", "scss", "less", "xml", "ini", "diff", "dockerfile", "nginx"]);
+const SENSITIVE_WORDS = {
+  "authentication and access": ["auth", "authn", "authz", "authentication", "authorization", "oauth", "login", "logout", "signin", "signup", "session", "sessions", "permission", "permissions", "acl", "rbac", "policy", "policies", "sso", "saml", "jwt"],
+  "secrets and crypto": ["crypto", "secret", "secrets", "credentials", "password", "passwords", "token", "tokens", "keys", "certs", "tls", "ssl", "encryption", "security"],
+  "money": ["billing", "payment", "payments", "invoice", "invoices", "checkout", "subscription", "subscriptions"],
+  "data migrations": ["migration", "migrations", "migrate"],
+  "build and deploy": ["workflows", "dockerfile", "terraform", "helm", "k8s", "kubernetes", "deploy", "deployment", "iam"],
+};
+
+// Like git(), but bounded in time and quiet on failure: a signal we can't compute is left out.
+function gitQuiet(args, { cwd, timeout = HISTORY_TIMEOUT_MS } = {}) {
+  const r = spawnSync("git", ["-c", "core.quotePath=false", ...args], { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, timeout });
+  return r.error || r.status !== 0 ? null : r.stdout;
+}
+
+const isoDay = (d) => d.toISOString().slice(0, 10);
+const shortList = (items, n = 3) => items.slice(0, n);
+
+// Who wrote this change, by mailmap-normalized email. Emails stay in memory; only names are kept.
+function changeAuthors(root, { logRange, worktree }) {
+  const keys = new Set();
+  const names = new Set();
+  const add = (name, email) => {
+    if (!email) return;
+    const mapped = gitQuiet(["check-mailmap", `${name || "x"} <${email}>`], { cwd: root, timeout: 5000 });
+    const m = mapped && /^(.*?)\s*<([^>]*)>\s*$/.exec(mapped.trim());
+    const [n, e] = m ? [m[1], m[2]] : [name, email];
+    keys.add(e.toLowerCase());
+    if (n) names.add(n);
+  };
+  if (logRange) {
+    const out = gitQuiet(["log", "--no-merges", "--no-show-signature", "--format=%aN%x1f%aE", logRange], { cwd: root });
+    for (const line of (out || "").split("\n")) {
+      const [n, e] = line.split("\x1f");
+      if (e) add(n, e);
+    }
+  }
+  if (worktree) {
+    const e = (gitQuiet(["config", "user.email"], { cwd: root, timeout: 5000 }) || "").trim();
+    const n = (gitQuiet(["config", "user.name"], { cwd: root, timeout: 5000 }) || "").trim();
+    add(n, e);
+  }
+  return { keys, names: [...names] };
+}
+
+function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
+  const out = { items: [], notes: [] };
+  const live = files.filter((f) => !f.generated && !f.mechanical && !f.binary);
+  const existing = live.filter((f) => f.status !== "added");
+  const code = live.filter((f) => f.language && !NON_CODE_LANG.has(f.language) && !isTestPath(f.path));
+
+  // ── from file paths alone
+  const dirs = new Set(live.map((f) => path.dirname(f.path)));
+  const tops = new Set(live.map((f) => (f.path.includes("/") ? f.path.split("/")[0] : ".")));
+  if (live.length > 1 && (tops.size >= 3 || dirs.size >= 6))
+    out.items.push({ id: "spread", tag: "verified", via: "file paths", text: `Touches ${dirs.size} directories across ${tops.size} top-level areas: ${shortList([...tops].sort(), 6).map((t) => (t === "." ? "the repo root" : `\`${t}\``)).join(", ")}${tops.size > 6 ? ", …" : ""}.` });
+
+  const hits = new Map();
+  for (const f of live) {
+    const segs = f.path.toLowerCase().split("/");
+    for (const [label, words] of Object.entries(SENSITIVE_WORDS)) {
+      const hit = segs.some((seg, i) => {
+        const tokens = (i === segs.length - 1 ? seg : seg.replace(/^\./, "")).split(/[._-]/).filter(Boolean);
+        return tokens.some((t) => words.includes(t));
+      });
+      if (hit) hits.set(label, [...(hits.get(label) || []), f.path]);
+    }
+  }
+  if (hits.size)
+    out.items.push({
+      id: "paths",
+      tag: "verified",
+      via: "file paths",
+      text: `Touches paths named for ${[...hits].map(([label, ps]) => `${label} (${ps.length})`).join(", ")}.`,
+      files: shortList([...new Set([...hits.values()].flat())], 4),
+    });
+
+  if (code.length && !files.some((f) => isTestPath(f.path)))
+    out.items.push({ id: "tests", tag: "verified", via: "file paths", text: `No test file changed alongside ${code.length} source file${code.length === 1 ? "" : "s"}.` });
+
+  // ── from history
+  if (!existing.length || !baseSha) return out; // nothing earlier to read (or the base is the empty tree)
+  const noHistory = (why) => out.notes.push(`History signals left out: ${why}.`);
+  if (gitQuiet(["rev-parse", "--is-shallow-repository"], { cwd: root, timeout: 5000 })?.trim() === "true") return (noHistory("this is a shallow clone, so history is incomplete"), out);
+  const baseDateStr = (gitQuiet(["log", "-1", "--format=%cI", baseSha], { cwd: root, timeout: 5000 }) || "").trim();
+  if (!baseDateStr) return (noHistory("the base commit's date couldn't be read"), out);
+  const baseDate = new Date(baseDateStr);
+  const since = isoDay(new Date(baseDate.getTime() - HISTORY_DAYS * 86400_000));
+  const fixSince = isoDay(new Date(baseDate.getTime() - FIX_DAYS * 86400_000));
+  const baseDay = isoDay(baseDate);
+  const authors = changeAuthors(root, { logRange, worktree });
+
+  const histPath = (f) => f.oldPath || f.path;
+  const paths = [...new Set(existing.sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions)).map(histPath))].slice(0, MAX_HISTORY_PATHS);
+  const raw = gitQuiet(
+    ["--literal-pathspecs", "log", baseSha, "--no-merges", "--no-renames", "--no-show-signature", `--since=${since}`, "--format=%x1e%aN%x1f%aE%x1f%aI%x1f%s", "--name-only", "--", ...paths],
+    { cwd: root },
+  );
+  if (raw === null) return (noHistory("reading history timed out or failed"), out);
+  const hist = new Map(); // path -> [{key, name, day, subject}]
+  for (const rec of raw.split("\x1e").slice(1)) {
+    const [head, ...rest] = rec.split("\n");
+    const [name, email, date, subject] = head.split("\x1f");
+    const c = { key: (email || "").toLowerCase(), name, day: (date || "").slice(0, 10), subject: subject || "" };
+    for (const p of rest) if (p) (hist.get(p) || hist.set(p, []).get(p)).push(c);
+  }
+  const by = (f) => hist.get(histPath(f)) || [];
+  const listFiles = (fs) => shortList(fs.map((f) => f.path), 3);
+
+  if (authors.keys.size) {
+    const strangers = existing.filter((f) => !by(f).some((c) => authors.keys.has(c.key)));
+    if (strangers.length && existing.length)
+      out.items.push({
+        id: "familiarity",
+        tag: "verified",
+        via: "git history by path; renames before this change aren't followed",
+        text: `${authors.names.length === 1 ? authors.names[0] : "The author"} made no commit to ${strangers.length} of the ${existing.length} existing files changed here between ${since} and the base commit (${baseDay}).`,
+        files: listFiles(strangers),
+        cmd: `git log --no-merges --since=${since} --format=%aN ${baseSha.slice(0, 10)} -- <file>`,
+      });
+
+    const owned = existing
+      .map((f) => {
+        const cs = by(f);
+        const tally = new Map();
+        for (const c of cs) tally.set(c.key, { n: (tally.get(c.key)?.n || 0) + 1, name: c.name });
+        const [top] = [...tally].sort((a, b) => b[1].n - a[1].n);
+        return { f, total: cs.length, top: top && { key: top[0], ...top[1] } };
+      })
+      .filter((o) => o.total >= 5 && o.top && o.top.n / o.total >= 0.6 && !authors.keys.has(o.top.key) && !NOT_A_PERSON.test(o.top.name || ""))
+      .sort((a, b) => b.top.n / b.total - a.top.n / a.total || b.total - a.total);
+    if (owned.length)
+      out.items.push({
+        id: "ownership",
+        tag: "verified",
+        via: "git history by path; renames before this change aren't followed",
+        text: `Most earlier commits to ${owned.length === 1 ? "one file" : `${owned.length} files`} are someone else's: ${shortList(owned).map((o) => `${o.top.name} wrote ${Math.round((o.top.n / o.total) * 100)}% of ${o.total} commits to \`${path.basename(o.f.path)}\``).join("; ")} (since ${since}).`,
+        files: shortList(owned.map((o) => o.f.path)),
+        cmd: `git shortlog -sn --no-merges --since=${since} ${baseSha.slice(0, 10)} -- <file>`,
+      });
+  } else out.notes.push("Author familiarity left out: the author's identity couldn't be determined.");
+
+  const fixed = existing
+    .map((f) => ({ f, fixes: by(f).filter((c) => c.day >= fixSince && FIX_COMMIT.test(c.subject) && !NOT_A_FIX.test(c.subject)) }))
+    .filter((x) => x.fixes.length >= 2)
+    .sort((a, b) => b.fixes.length - a.fixes.length);
+  if (fixed.length) {
+    const top = fixed[0];
+    const latest = top.fixes.slice().sort((a, b) => (a.day < b.day ? 1 : -1))[0];
+    out.items.push({
+      id: "fixes",
+      tag: "author text",
+      via: "earlier commit messages",
+      text: `${fixed.length === 1 ? "One file has" : `${fixed.length} files have`} had repeated fix-style commits since ${fixSince}: \`${path.basename(top.f.path)}\` has ${top.fixes.length}, the latest on ${latest.day}.`,
+      // Shown on the page only: review.txt is read by the agent, and old commit wording isn't something to feed it.
+      quote: redact(latest.subject.slice(0, 80), null),
+      files: shortList(fixed.map((x) => x.f.path)),
+      cmd: `git log --no-merges --since=${fixSince} --oneline ${baseSha.slice(0, 10)} -- <file>`,
+    });
+  }
+  return out;
+}
+
 function linguistGenerated(root, paths) {
   if (!paths.length) return new Set();
   const r = spawnSync("git", ["check-attr", "-z", "linguist-generated", "linguist-vendored", "--stdin"], {
@@ -864,6 +1042,8 @@ function collect(opts) {
         .map(([sha, author, date, subject]) => ({ sha, author, date, subject: redact(subject, null) }))
     : [];
 
+  const signals = historySignals(root, files, { baseSha: baseIsTree ? null : baseSha, logRange, worktree, redact });
+
   const remote = (git(["remote", "get-url", "origin"], { cwd: root, allowFail: true }) || "").trim();
   const repoName = (remote.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/) || [])[1] || path.basename(root);
 
@@ -898,6 +1078,7 @@ function collect(opts) {
     untracked,
     fingerprint,
     redactions: redact.count(),
+    signals,
     commits,
     files,
   };
@@ -945,6 +1126,14 @@ function renderReviewText(diff) {
     out.push("#");
     out.push("# Commits:");
     for (const c of diff.commits) out.push(`#   ${c.sha} ${c.subject}  (${c.author})`);
+  }
+  const sig = diff.signals || { items: [], notes: [] };
+  if (sig.items.length || sig.notes.length) {
+    out.push("#");
+    out.push("# Signals computed from git and file paths (never from the PR text). The page shows them too;");
+    out.push("# use them to calibrate risk.level and the reading order, don't restate them:");
+    for (const i of sig.items) out.push(`#   [${i.tag}] ${i.text.replace(/`/g, "")}${i.files ? `  (${i.files.join(", ")})` : ""}`);
+    for (const n of sig.notes) out.push(`#   (${n})`);
   }
   out.push("");
   for (const f of diff.files) {
@@ -1023,7 +1212,7 @@ const CALLOUT_KINDS = new Set(["note", "risk", "breaking", "decision", "question
 const SURFACES = new Set(["browser", "desktop", "mobile", "popover", "panel", "bare"]);
 const TEXT_KEYS = new Set(["md", "html", "css", "source", "brief", "intro", "why", "summary", "note", "caption", "text"]);
 // Ids the page itself uses; recap ids must not shadow them.
-const RESERVED_IDS = new Set(["top", "main", "app", "overview", "ask", "key-changes", "checks", "wrap-up", "files", "hr-data", "hr-title", "hr-top-title"]);
+const RESERVED_IDS = new Set(["top", "main", "app", "overview", "ask", "signals", "key-changes", "checks", "wrap-up", "files", "hr-data", "hr-title", "hr-top-title"]);
 const isReservedId = (id) => RESERVED_IDS.has(id) || /^(file-|t\d+-|v-|mmd\d)/.test(id);
 const VALID_ID = /^[A-Za-z][\w-]*$/;
 // Tags the renderer strips together with everything inside them.

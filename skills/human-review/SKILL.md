@@ -76,7 +76,8 @@ moved is marked `⟵ moved from <file>:<line>`. A hunk that touches access contr
 authentication, SQL, deserialization, crypto, or a shell or `eval` call may carry
 a line like `⚑ check this for security (line 42): …`. The page shows the same
 question to the reviewer at that line. Look at the spot yourself (see "Security
-cues" below). Open surrounding source when a hunk doesn't make sense
+cues" below). The header of `review.txt` also lists **signals**: facts the CLI computed from
+git history and file paths (see "Signals" below). Open surrounding source when a hunk doesn't make sense
 on its own: callers, types, the rest of a component. Read the commit messages
 and the PR description (`--pr` includes it in `diff.json`).
 
@@ -314,6 +315,28 @@ each `⚑` in `review.txt`:
 - A security issue the scan missed still gets a `risk` annotation or a
   `security` callout (both held back).
 
+### Signals
+
+The page shows a short "From git" list under the title, and `review.txt` lists the
+same rows in its header. They're computed by `collect` from git history and file
+paths only, never from the PR title or description or from the commit messages
+under review, so what the author wrote can't steer them. Each row has a tag:
+**verified** (git history or paths; the tooltip has the command that reproduces
+it) or **author text** (counted from git but classified by earlier commit
+wording, such as "fix-style commits"). They cover: an author with no earlier
+commits to some of the changed files, files mostly written by someone else, files
+with repeated recent fixes, changes spread across many directories, paths named
+for auth, secrets, money, migrations, or deploy, and source changes with no test
+file. A row appears only when it says something, and there is no score.
+
+- You can't edit them, and there's no recap field for them. Don't restate them.
+- Use them to calibrate `risk.level` and the order of `focus`: a first-time
+  author in a path named for auth deserves a closer look than the same diff
+  from the file's owner. If you disagree with a signal, say so in `risk.why`.
+- Your own `risk.why` is shown tagged **inference**.
+- Signals are left out, with a note, on a shallow clone or when history can't be
+  read in time. Don't fill the gap by guessing.
+
 ### Key changes
 
 `keyChanges` holds **three to eight** files that carry the change, ordered the
@@ -441,6 +464,8 @@ line quoted) or to a named block. When the user pastes it:
   example; use obvious placeholders.
 - The page's Content-Security-Policy blocks all network requests, so remote
   images or stylesheets in your HTML or Markdown won't load.
+- The signals name contributors (from git history), so check before sharing the
+  page outside the team. Emails aren't stored in it.
 - Everything runs locally. The CLI only touches the network for `--pr`, which
   uses `gh` and `git fetch`.
 
