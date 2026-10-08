@@ -67,8 +67,10 @@ Update it rather than starting over.
 
 ### 3. Read the change
 
-Read all of `review.txt` (in chunks if it's long). Generated and lock files are
-summarized, not printed. Open surrounding source when a hunk doesn't make sense
+Read all of `review.txt` (in chunks if it's long). Generated files and
+mechanical ones (renamed with identical contents, or only moved or re-indented
+lines) are summarized with their proof instead of printed, and a line that only
+moved is marked `⟵ moved from <file>:<line>`. Open surrounding source when a hunk doesn't make sense
 on its own: callers, types, the rest of a component. Read the commit messages
 and the PR description (`--pr` includes it in `diff.json`).
 
@@ -144,11 +146,20 @@ answer each one only once:
 2. **Should I worry?** Covered by `risk` and `focus`.
 3. **What does it look like, and what contracts moved?** Covered by `sections`:
    wireframes, screenshots, data model, API, diagrams.
-4. **Show me the code that matters.** Covered by `keyChanges` (annotated diffs)
-   and `files` (every file, triaged).
+4. **Show me the code that matters.** Covered by `keyChanges` (annotated diffs),
+   `concerns` (every file, grouped by what it does), and `files` (triage).
 
 Then `questions` and `checks` close the loop: what you need from them, what you
 already verified, and what they should try themselves.
+
+**The reviewer reads before they see your conclusions.** The page holds back your
+findings (the `risk` rating, `risk`, `question`, and `praise` annotations, and
+`risk`, `security`, and `question` callouts) until the reviewer has viewed that
+file or asks to see them. Research on AI-assisted review found that showing an
+AI's conclusions first makes reviewers fixate on what it flagged and miss the
+rest. So keep the always-visible parts (`brief`, `summary`, `focus`, notes,
+decisions) descriptive: say what changed and where to look, and put what you
+*concluded* in the held-back fields.
 
 ### The fields that carry the most weight
 
@@ -164,17 +175,35 @@ already verified, and what they should try themselves.
 - **`summary`**: two to five bullets of *what changed*, each one a fact a
   reviewer would otherwise have to dig out. No "this PR…" throat-clearing.
 - **`focus`**: the suggested reading order, three to six stops. Each stop is a
-  short title, a why ("check that…", "this is where…"), and a `ref` to
+  short title, a why ("check how…", "this is where…"), and a `ref` to
   `path:line` or `#block-id`. This is the most valuable thing on the page. Put
-  the riskiest or most consequential thing first.
-- **`files`**: give every changed file a `group` (Server, Web, Data, Tests,
-  Docs, Config, Generated, or whatever fits this repo), a `review` level, and
-  for anything non-obvious a short `note`:
+  the riskiest or most consequential thing first. Name the *area and what to
+  check*, not your verdict: "How the `ttlDays` default is chosen", not "Expiry
+  default swallows Never". The verdict goes in a `risk` annotation, which the
+  reviewer sees after their own look.
+- **`concerns`**: every changed file, grouped by **what it does together**, in
+  reading order. A concern is a named slice of the change ("Token storage and
+  lookup", "Share popover", "Migration") with a one-line `why`, and its files in
+  the order to read them: types, schema, and interfaces first, then the code
+  that uses them, with **each test right after the code it tests**. Don't group
+  by layer (Server, Web, Tests): research on review ordering finds that keeping
+  related parts together is what helps, and reviewers rate orders with no
+  visible logic among the worst. `collect` writes a starting set (each file
+  with its tests, by directory); rename, merge, and reorder it. The build
+  warns when a test lands in a different concern than its code.
+- **`files`**: a `review` level for each file, and a short `note` for anything
+  non-obvious:
   - `careful`: logic, security, data, or contracts. Read every line.
   - `skim`: straightforward or presentational. Glance at it.
-  - `skip`: generated, lockfiles, snapshots, pure renames, formatting.
 
-  Accurate triage is how a 40-file PR becomes a 6-file read.
+  There is no "skip". Files the diff *proves* need no reading are tiered
+  automatically, with the proof shown: **mechanical** (renamed with identical
+  contents, or every changed line is an existing line moved or re-indented) and
+  **generated** (lockfiles, snapshots, build output, `linguist-generated`).
+  Leave them out of `files` and `concerns`. You can raise one to `careful` or
+  `skim` if it matters (a lockfile bump that pulls in a new major version), but
+  you can't mark anything as needing less attention than `skim`. Accurate
+  triage is how a 40-file PR becomes a 6-file read, without hiding real code.
 
 ### Annotations
 
@@ -188,11 +217,14 @@ legible.
   elsewhere. Never restate the code ("increments the counter").
 - Pick the `kind` honestly. Each kind gets its own color:
   - `risk`: a bug, a sharp edge, or a missing check. Be specific about the
-    failure and suggest the fix.
-  - `question`: you aren't sure. Don't guess silently.
+    failure and suggest the fix. *Held back until the reviewer's own pass.*
+  - `question`: you aren't sure. Don't guess silently. *Held back.*
   - `decision`: a deliberate tradeoff the reviewer should agree with.
-  - `note`: context.
-  - `praise`: use sparingly, for something genuinely worth copying.
+  - `note`: context: what the line is for, what it interacts with.
+  - `praise`: use sparingly, for something genuinely worth copying. *Held back.*
+
+  Notes and decisions explain the code and are always visible, so they mustn't
+  smuggle in a verdict ("this is wrong because…" belongs in a `risk`).
 - Use `"to"` for multi-line spans, and `"side": "old"` for a removed line,
   numbered from the OLD column of `review.txt`.
 - Line numbers come from `review.txt`. The build rejects any line that isn't in
@@ -302,7 +334,8 @@ line quoted) or to a named block. When the user pastes it:
   `--base origin/main --head <branch>`.
 - **JSON syntax error**: the build prints the line and column.
 - **Huge diffs**: the page stays fast because files render only when opened.
-  Lean on `files[...].review` to tell the reviewer what to skip, and keep
+  Lean on `concerns` and `files[...].review` to show the reviewer where to
+  spend their time (mechanical and generated files are tiered for you), and keep
   `keyChanges` to eight or fewer.
 - **File size**: about 350 KB for the renderer, plus the diff and the full
   text of changed files (so readers can expand context), typically a few

@@ -45,9 +45,15 @@ Conventions:
     "verified": [{ "text": "Unit tests pass", "cmd": "npm test" }, "Migration applies on a seed DB"],
     "manual": ["Create a link with **Never** and check its expiry."]
   },
+  "concerns": [                                           // every file, grouped by what it does, in reading order
+    { "title": "Token storage and lookup", "why": "How a link is created, hashed, resolved, and revoked.",
+      "files": ["src/db/migrations/002_share_links.sql", "src/server/shareLinks.ts", "tests/shareLinks.test.ts"] },
+    { "title": "Routes and permissions", "why": "Who may create links, and the one public route.",
+      "files": ["src/server/permissions.ts", "tests/permissions.test.ts", "src/server/routes.ts"] }
+  ],
   "files": {
-    "src/server/routes.ts": { "group": "Server", "review": "careful", "note": "Three new routes, one public." },
-    "package-lock.json":   { "group": "Generated", "review": "skip" }
+    "src/server/routes.ts": { "review": "careful", "note": "Three new routes, one public." },
+    "src/web/components/SharePopover.tsx": { "review": "skim" }
   }
 }
 ```
@@ -58,8 +64,9 @@ Conventions:
 | `focus[].ref` | `"path:line"`, `"path:start-end"`, `"path"`, or `"#block-or-section-id"`. Built-in section ids: `overview`, `key-changes`, `checks`, `files`. A custom section's id is its slugified title unless you set `id`. |
 | `sections[]` | Rendered in order between the overview and key changes. Each needs a `title` and `blocks`; `id` and `intro` are optional. |
 | `keyChanges[]` | `diff` blocks (the `type` can be omitted) or `code` blocks. Rendered as tabs, in order. |
-| `files[path].review` | `"careful"`, `"skim"`, or `"skip"`. Drives sorting, the sidebar dots, and the progress bar (skipped files don't count). |
-| `files[path].group` | Any label. Groups drive the footprint bar at the top and the All files section. The group named `Generated`, and any group whose files are all `skip`, is drawn hatched. |
+| `concerns[]` | `title` (required), `why` (one line, markdown), and `files` in reading order: interfaces and schema before the code that uses them, each test right after the code it tests. Every file belongs to at most one concern. Concerns drive the All files section, the sidebar, and the footprint bar, and each gets an id `c-<slugified title>` usable in focus refs. Files in no concern are listed under "Other changes" (the build warns). Leave mechanical and generated files out; they get their own groups. |
+| `files[path].review` | `"careful"` or `"skim"`. Mechanical and generated files are tiered automatically from the diff, with a proof shown to the reviewer; you may raise them to `careful` or `skim`, never lower. `"skip"` is no longer accepted (treated as `"skim"`, with a warning). |
+| `files[path].note` | A short markdown note shown under the path. |
 
 ## Blocks
 
@@ -76,7 +83,8 @@ Conventions:
 ```
 
 `kind` is one of `note`, `risk`, `breaking`, `decision`, `question`,
-`security`, or `perf`.
+`security`, or `perf`. `risk`, `security`, and `question` callouts are findings,
+held back until the reviewer asks to see them.
 
 ### `diff`: annotated changes in one file
 
@@ -101,6 +109,9 @@ Conventions:
   lines and use the OLD number.
 - `to` makes the note cover a span; it's drawn after the last line.
 - `kind` is one of `note`, `risk`, `question`, `decision`, or `praise`.
+  `risk`, `question`, and `praise` are the agent's findings: the page holds them
+  back (with the file's risk dot) until the reviewer has viewed that file or
+  asks to see them. `note` and `decision` are always shown.
 - Added files render as a single annotated column, deleted files as removed
   lines. Readers can expand unchanged context between hunks.
 

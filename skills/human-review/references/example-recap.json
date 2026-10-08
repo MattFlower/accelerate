@@ -19,8 +19,8 @@
       "ref": "src/server/routes.ts:49"
     },
     {
-      "title": "Expiry default swallows \u201cNever\u201d",
-      "why": "`null ?? 7` is `7`, so the popover's *Never* option silently becomes 7 days.",
+      "title": "How the `ttlDays` default is chosen",
+      "why": "Check what an explicit `null` (the popover's *Never*) turns into.",
       "ref": "src/server/routes.ts:31"
     },
     {
@@ -30,7 +30,7 @@
     },
     {
       "title": "When a board stops being \u201cshared\u201d",
-      "why": "Visibility is recomputed on revoke but not on expiry.",
+      "why": "Check every way a link stops being live (revoked, expired) and whether visibility follows.",
       "ref": "src/server/shareLinks.ts:45"
     }
   ],
@@ -490,57 +490,78 @@
   },
   "files": {
     "README.md": {
-      "group": "Docs",
       "review": "skim",
       "note": "Uncommitted: one line about sharing."
     },
-    "package-lock.json": {
-      "group": "Generated",
-      "review": "skip",
-      "note": "Lockfile churn only."
-    },
     "src/db/migrations/002_share_links.sql": {
-      "group": "Data",
       "review": "careful",
       "note": "New table + column."
     },
     "src/server/permissions.ts": {
-      "group": "Server",
       "review": "careful",
       "note": "Adds `canShare`."
     },
     "src/server/routes.ts": {
-      "group": "Server",
       "review": "careful",
       "note": "Three new routes, one public."
     },
     "src/server/shareLinks.ts": {
-      "group": "Server",
       "review": "careful",
       "note": "Token lifecycle."
     },
     "src/web/components/ProjectHeader.tsx": {
-      "group": "Web",
       "review": "skim",
       "note": "Share button + pill."
     },
     "src/web/components/SharePopover.tsx": {
-      "group": "Web",
       "review": "skim",
       "note": "New popover; presentational."
     },
     "tests/permissions.test.ts": {
-      "group": "Tests",
       "review": "skim"
     },
     "tests/shareLinks.test.ts": {
-      "group": "Tests",
       "review": "skim"
     },
     ".env": {
-      "group": "Config",
       "review": "careful",
       "note": "Untracked and **not gitignored** \u2014 don't commit it."
     }
-  }
+  },
+  "concerns": [
+    {
+      "title": "Token storage and lookup",
+      "why": "How a link is created, stored as a hash, resolved, and revoked.",
+      "files": [
+        "src/db/migrations/002_share_links.sql",
+        "src/server/shareLinks.ts",
+        "tests/shareLinks.test.ts"
+      ]
+    },
+    {
+      "title": "Routes and permissions",
+      "why": "Who may create or revoke links, and the one public route.",
+      "files": [
+        "src/server/permissions.ts",
+        "tests/permissions.test.ts",
+        "src/server/routes.ts"
+      ]
+    },
+    {
+      "title": "Share UI",
+      "why": "The owner-only Share button, the pill, and the popover.",
+      "files": [
+        "src/web/components/ProjectHeader.tsx",
+        "src/web/components/SharePopover.tsx"
+      ]
+    },
+    {
+      "title": "Docs and local config",
+      "why": "",
+      "files": [
+        "README.md",
+        ".env"
+      ]
+    }
+  ]
 }

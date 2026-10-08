@@ -240,12 +240,14 @@
   // edit keeps the reviewer's comments.
   const KEY = `hr:${hash([diff.repo, diff.base.sha, diff.head.sha, diff.fingerprint].join("|"))}`;
   const state = Object.assign({ comments: [], viewed: {}, checks: {}, verdict: null, general: "" }, store.get(KEY, {}));
+  // Which agent findings the reviewer has chosen to see (see "agent findings" below).
+  state.revealed = Object.assign({ all: false, files: {}, blocks: {} }, state.revealed || {});
   const save = () => {
     store.set(KEY, state);
     updateCounts();
   };
   const prefs = Object.assign(
-    { mode: window.innerWidth >= 1180 ? "split" : "unified", wrap: true, sketch: true },
+    { mode: window.innerWidth >= 1180 ? "split" : "unified", wrap: true, sketch: true, findings: "after" },
     store.get("hr:prefs", {}),
   );
   const savePrefs = () => store.set("hr:prefs", prefs);
@@ -255,45 +257,111 @@
 
   // ───────────────────────────────────────────── file metadata
 
-  const PRIO = { careful: 0, skim: 1, skip: 2 };
+  // Review tiers. The agent marks a file "careful" or "skim"; "mechanical" (no new code) and
+  // "generated" are computed by the CLI from the diff and carry a proof. The agent can raise
+  // attention on an auto-tiered file but can't lower it.
+  const TIER_ORDER = { careful: 0, skim: 1, mechanical: 2, generated: 3 };
+  const TIER_LABEL = { careful: "Read closely", skim: "Skim", mechanical: "Mechanical", generated: "Generated" };
   const fileMeta = (p) => {
     const f = byPath.get(p);
     const m = (recap.files && recap.files[p]) || {};
+    const chosen = m.review === "careful" || m.review === "skim" ? m.review : null;
+    const auto = f && f.generated ? "generated" : f && f.mechanical ? "mechanical" : null;
     return {
-      group: m.group || (f && f.generated ? "Generated" : "Other"),
-      review: m.review || (f && f.generated ? "skip" : "skim"),
+      review: chosen || auto || "skim",
+      proof: f && f.generated ? `Generated: ${f.generatedBy || "matches a generated-file pattern"}.` : f && f.mechanical ? f.mechanical.proof : "",
       note: m.note || "",
     };
   };
-  const changed = (f) => f.additions + f.deletions;
-
-  const groups = (() => {
-    const map = new Map();
-    for (const f of files) {
-      const g = fileMeta(f.path).group;
-      if (!map.has(g)) map.set(g, { name: g, files: [], adds: 0, dels: 0, prio: 2 });
-      const e = map.get(g);
-      e.files.push(f);
-      e.adds += f.additions;
-      e.dels += f.deletions;
-      e.prio = Math.min(e.prio, PRIO[fileMeta(f.path).review] ?? 1);
+  const isAuto = (p) => TIER_ORDER[fileMeta(p).review] >= 2;
+  const byTier = (a, b) => TIER_ORDER[fileMeta(a.path).review] - TIER_ORDER[fileMeta(b.path).review] || a.path.localeCompare(b.path);
+  // Sources in tier order, each followed by its tests.
+  const withTestsAfter = (list) => {
+    const inList = new Set(list.map((f) => f.path));
+    const out = [];
+    for (const f of [...list].sort(byTier)) {
+      if (f.testFor && inList.has(f.testFor)) continue;
+      out.push(f, ...list.filter((t) => t.testFor === f.path).sort(byTier));
     }
-    const list = [...map.values()];
-    list.sort((a, b) => {
-      const ga = a.name === "Generated" ? 1 : 0;
-      const gb = b.name === "Generated" ? 1 : 0;
-      return ga - gb || a.prio - b.prio || b.adds + b.dels - (a.adds + a.dels);
-    });
+    return out;
+  };
+
+  // Groups in reading order: the recap's concerns, then files no concern claimed, then the
+  // proven-mechanical and generated files.
+  const groups = (() => {
+    const list = [];
+    const placed = new Set();
+    const make = (name, fs, extra = {}) => {
+      fs.forEach((f) => placed.add(f.path));
+      return { name, files: fs, adds: fs.reduce((x, f) => x + f.additions, 0), dels: fs.reduce((x, f) => x + f.deletions, 0), ...extra };
+    };
+    for (const c of Array.isArray(recap.concerns) ? recap.concerns : []) {
+      if (!c || !Array.isArray(c.files)) continue;
+      const fs = c.files.filter((p) => byPath.has(p) && !placed.has(p)).map((p) => byPath.get(p));
+      if (fs.length) list.push(make(c.title || "Untitled", fs, { id: c.id, why: c.why || "" }));
+    }
+    const rest = files.filter((f) => !placed.has(f.path));
+    const other = rest.filter((f) => !isAuto(f.path));
+    if (other.length) list.push(make(list.length ? "Other changes" : "Changes", withTestsAfter(other)));
+    const mech = rest.filter((f) => fileMeta(f.path).review === "mechanical").sort(byTier);
+    if (mech.length) list.push(make("Mechanical changes", mech, { auto: "mechanical", why: "No new code in these files — each one's proof is shown under its name. Open a row to check it." }));
+    const gen = rest.filter((f) => fileMeta(f.path).review === "generated").sort(byTier);
+    if (gen.length) list.push(make("Generated files", gen, { auto: "generated" }));
     let c = 0;
     for (const g of list) {
-      g.hatch = g.name === "Generated" || g.prio === 2;
+      g.hatch = !!g.auto || g.files.every((f) => isAuto(f.path));
       g.color = g.hatch ? null : `var(--g${(c++ % 6) + 1})`;
-      g.files.sort((a, b) => (PRIO[fileMeta(a.path).review] ?? 1) - (PRIO[fileMeta(b.path).review] ?? 1) || a.path.localeCompare(b.path));
     }
     return list;
   })();
   const orderedFiles = groups.flatMap((g) => g.files);
-  const reviewable = orderedFiles.filter((f) => fileMeta(f.path).review !== "skip");
+  const reviewable = orderedFiles.filter((f) => !isAuto(f.path));
+
+  // ───────────────────────────────────────────── agent findings, after the reviewer's own pass
+  //
+  // Showing an AI's conclusions before a reviewer has formed their own anchors them on what it
+  // flagged (Tufano et al., ICSE 2025). So the agent's findings — its risk read, risk/question/
+  // praise notes, and risk/security/question callouts — stay collapsed until the reviewer has
+  // viewed that file, or chooses to see them all. Explanatory notes stay visible.
+  const FINDING_NOTES = new Set(["risk", "question", "praise"]);
+  const FINDING_CALLOUTS = new Set(["risk", "security", "question"]);
+  const holdFindings = () => prefs.findings !== "always" && !state.revealed.all;
+  const fileFindingsHidden = (p) => holdFindings() && !state.revealed.files[p];
+  const blockFindingHidden = (id) => holdFindings() && !state.revealed.blocks[id];
+  const findingWatchers = new Set(); // redraw functions for held-back placeholders
+  const notifyFindings = () => {
+    for (const fn of findingWatchers) fn();
+  };
+  function revealFile(p) {
+    state.revealed.files[p] = true;
+    save();
+    rerenderFile(p);
+    notifyFindings();
+  }
+  function revealBlock(id) {
+    state.revealed.blocks[id] = true;
+    save();
+    notifyFindings();
+  }
+  function revealAll() {
+    state.revealed.all = true;
+    save();
+    rerenderAllDiffs();
+    notifyFindings();
+  }
+  const countFindings = () => {
+    let n = recap.risk && recap.risk.level ? 1 : 0;
+    const walk = (x) => {
+      if (Array.isArray(x)) return x.forEach(walk);
+      if (!x || typeof x !== "object") return;
+      if (x.type === "callout" && FINDING_CALLOUTS.has(x.kind)) n++;
+      if (Array.isArray(x.annotations) && (x.type === "diff" || x.type === "code" || !x.type)) n += x.annotations.filter((a) => FINDING_NOTES.has(a.kind)).length;
+      for (const v of Object.values(x)) if (v && typeof v === "object") walk(v);
+    };
+    walk(recap.sections);
+    walk(recap.keyChanges);
+    return n;
+  };
 
   // ───────────────────────────────────────────── syntax highlighting + word diff
 
@@ -521,7 +589,9 @@
   }
 
   function addComment(anchor, body) {
-    state.comments.push({ id: nextId(), anchor, body, at: new Date().toISOString() });
+    // `blind`: written before the reviewer saw the agent's findings (for this file, or at all).
+    const blind = anchor.type === "line" ? fileFindingsHidden(anchor.file) : holdFindings();
+    state.comments.push({ id: nextId(), anchor, body, blind, at: new Date().toISOString() });
     save();
   }
   function updateComment(id, body) {
@@ -562,10 +632,13 @@
     return inst.el;
   }
 
-  function annotationIndex(blk) {
+  function annotationIndex(blk, hideFindings = false) {
     const map = new Map();
     const marked = new Map();
-    for (const a of blk.annotations || []) {
+    const all = blk.annotations || [];
+    const shown = hideFindings ? all.filter((a) => !FINDING_NOTES.has(a.kind)) : all;
+    const held = all.length - shown.length;
+    for (const a of shown) {
       const side = a.side === "old" ? "o" : "n";
       const end = Number.isInteger(a.to) && a.to >= a.line ? Math.min(a.to, a.line + 5000) : a.line;
       const key = `${side}${end}`;
@@ -573,7 +646,19 @@
       map.get(key).push(a);
       for (let x = a.line; x <= end; x++) marked.set(`${side}${x}`, a.kind || "note");
     }
-    return { notes: map, marked };
+    return { notes: map, marked, held };
+  }
+
+  // Placeholder for findings held back in one file. It doesn't say where they are.
+  function heldBanner(n, onShow) {
+    return h(
+      "div",
+      { class: "held" },
+      icon("eye"),
+      h("span", null, `${plural(n, "agent finding")} for this file ${n === 1 ? "is" : "are"} held back until you've reviewed it. Mark the file Viewed to compare notes, or `),
+      h("button", { type: "button", class: "linklike", onclick: onShow }, "show now"),
+      ".",
+    );
   }
 
   function drawDiff(inst, headless) {
@@ -604,6 +689,8 @@
         ),
       );
       if (blk.summary) el.append(h("div", { class: "diff-summary" }, md(blk.summary, { cls: "" })));
+      const held = annotationIndex(blk, fileFindingsHidden(file.path)).held;
+      if (held) el.append(heldBanner(held, () => revealFile(file.path)));
     }
 
     if (file.binary) {
@@ -618,7 +705,7 @@
     const allHunks = file.hunks.map((hk, i) => ({ ...hk, index: i }));
     const hunks = inst.showAll ? allHunks : hunksFor(file, blk);
     const { rows, lines } = rowModel(file, hunks, allHunks);
-    const { notes, marked } = annotationIndex(blk);
+    const { notes, marked } = annotationIndex(blk, fileFindingsHidden(file.path));
     const lang = file.language;
 
     const single = file.status === "added" ? "new" : file.status === "deleted" ? "old" : null;
@@ -674,6 +761,24 @@
       return td;
     };
     const signCell = (t, cls) => h("td", { class: `s ${cls || ""}` }, t === " " ? "" : t === "-" ? "−" : t || "");
+
+    // Lines the CLI paired with an identical line elsewhere in the change are dimmed; the first
+    // line of each run says where it moved from or to.
+    const lastMv = { o: null, n: null };
+    const markMoved = (td, l, sideKey) => {
+      if (!l || !l.mv) {
+        lastMv[sideKey] = null;
+        return;
+      }
+      const [kind, p, ln] = l.mv;
+      const dir = l.t === "+" ? "from" : "to";
+      const here = p === file.path;
+      td.classList.add("mv");
+      td.title = kind === "indent" ? "Same content, re-indented" : `Same content, moved ${dir} ${here ? `line ${ln}` : `${p}:${ln}`}`;
+      const run = `${kind}|${p}`;
+      if (lastMv[sideKey] !== run) td.append(h("span", { class: "mvtag" }, kind === "indent" ? "re-indented" : here ? `moved ${dir} line ${ln}` : `moved ${dir} ${splitPath(p)[1]}`));
+      lastMv[sideKey] = run;
+    };
 
     // The first editor built after a user action gets focus; re-renders don't.
     const takeFocus = () => {
@@ -794,11 +899,14 @@
       const tr = h("tr", { class: cls });
       if (l.n != null) tr.dataset.n = l.n;
       if (l.o != null) tr.dataset.o = l.o;
+      const cc = codeCell(l);
+      if (l.t === " ") lastMv.o = lastMv.n = null;
+      else markMoved(cc, l, l.t === "-" ? "o" : "n");
       if (mode === "single") {
         const side = single === "new" ? "n" : "o";
-        tr.append(numCell(side, single === "new" ? l.n : l.o), signCell(l.t), codeCell(l));
+        tr.append(numCell(side, single === "new" ? l.n : l.o), signCell(l.t), cc);
       } else {
-        tr.append(numCell("o", l.t === "+" ? null : l.o), numCell("n", l.t === "-" ? null : l.n), signCell(l.t), codeCell(l));
+        tr.append(numCell("o", l.t === "+" ? null : l.o), numCell("n", l.t === "-" ? null : l.n), signCell(l.t), cc);
         // The comment button belongs to one side in unified mode.
         if (l.t === " ") tr.children[0].querySelector(".plus")?.remove();
       }
@@ -829,6 +937,11 @@
           markRange(tdl, rng[0], "wd-del");
           markRange(tdr, rng[1], "wd-add");
         }
+      }
+      if (ctx) lastMv.o = lastMv.n = null;
+      else {
+        markMoved(tdl, l, "o");
+        markMoved(tdr, r, "n");
       }
       tr.append(
         l ? numCell("o", l.o, lc) : h("td", { class: "n empty" }),
@@ -983,9 +1096,12 @@
   }
 
   function setViewed(p, v) {
-    if (v) state.viewed[p] = true;
-    else delete state.viewed[p];
+    if (v) {
+      state.viewed[p] = true;
+      state.revealed.files[p] = true; // reviewed it: now compare with what the agent found
+    } else delete state.viewed[p];
     save();
+    notifyFindings();
     for (const inst of liveDiffs) if (inst.file.path === p) refresh(inst);
     for (const box of document.querySelectorAll(`[data-viewed="${CSS.escape(p)}"]`)) box.checked = v;
     for (const row of document.querySelectorAll(`.frow[data-path="${CSS.escape(p)}"]`)) row.classList.toggle("is-viewed", v);
@@ -1002,8 +1118,15 @@
 
   // `code` blocks: an excerpt of a file at head (changed or not).
   function renderCode(b) {
-    const text = contents[b.file];
     const wrap = h("div", { class: "diff" });
+    const draw = () => drawCode(b, wrap);
+    if ((b.annotations || []).some((a) => FINDING_NOTES.has(a.kind))) findingWatchers.add(draw);
+    draw();
+    return wrap;
+  }
+  function drawCode(b, wrap) {
+    wrap.textContent = "";
+    const text = contents[b.file];
     const [dir, base] = splitPath(b.file);
     wrap.append(
       h(
@@ -1015,6 +1138,9 @@
       ),
     );
     if (b.summary) wrap.append(h("div", { class: "diff-summary" }, md(b.summary, { cls: "" })));
+    const hide = fileFindingsHidden(b.file);
+    const { notes, marked, held } = annotationIndex(b, hide);
+    if (held) wrap.append(heldBanner(held, () => revealFile(b.file)));
     if (text == null) {
       wrap.append(h("div", { class: "diff-empty" }, "File contents were not embedded."));
       return wrap;
@@ -1022,8 +1148,7 @@
     const all = text.split("\n");
     if (all[all.length - 1] === "") all.pop();
     const [s, e] = b.lines || [1, all.length];
-    const { notes, marked } = annotationIndex(b);
-    const lang = b.language || (byPath.get(b.file) || {}).language || guessLang(b.file);
+    const lang = b.language || (byPath.get(b.file) || {}).language;
     const table = h("table", { class: "code single" }, h("colgroup", null, h("col", { class: "num" }), h("col", { class: "sign" }), h("col")));
     const tbody = h("tbody");
     table.append(tbody);
@@ -1043,13 +1168,8 @@
       }
     }
     wrap.append(h("div", { class: "diff-scroll" + (prefs.wrap ? "" : " nowrap") }, table));
-    return wrap;
   }
-  function guessLang(p) {
-    const ext = (p.split(".").pop() || "").toLowerCase();
-    const m = { js: "javascript", ts: "typescript", tsx: "typescript", jsx: "javascript", py: "python", rb: "ruby", go: "go", rs: "rust", java: "java", json: "json", yml: "yaml", yaml: "yaml", sql: "sql", css: "css", html: "xml", sh: "bash", md: "markdown" };
-    return m[ext] || null;
-  }
+
 
   // ───────────────────────────────────────────── wireframes
 
@@ -1575,12 +1695,20 @@ ul, ol { margin: 0; padding-left: 18px; }
       case "callout": {
         const k = b.kind || "note";
         const names = { risk: "Risk", breaking: "Breaking change", decision: "Decision", note: "Note", question: "Question", security: "Security", perf: "Performance" };
-        el = h(
-          "div",
-          { class: `callout k-${k}` },
-          icon(k),
-          h("div", null, h("div", { class: "ct" }, h("span", { class: "kind" }, names[k] || k), b.title || ""), b.md ? md(b.md) : null),
-        );
+        const full = () => h("div", { class: `callout k-${k}` }, icon(k), h("div", null, h("div", { class: "ct" }, h("span", { class: "kind" }, names[k] || k), b.title || ""), b.md ? md(b.md) : null));
+        if (!FINDING_CALLOUTS.has(k)) {
+          el = full();
+          break;
+        }
+        el = h("div");
+        const draw = () =>
+          el.replaceChildren(
+            blockFindingHidden(b.id)
+              ? h("div", { class: "held" }, icon("eye"), h("span", null, "An agent finding is held back here until you've formed your own view, or "), h("button", { type: "button", class: "linklike", onclick: () => revealBlock(b.id) }, "show it now"), ".")
+              : full(),
+          );
+        findingWatchers.add(draw);
+        draw();
         break;
       }
       case "diff": {
@@ -1887,7 +2015,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         h("strong", null, plural(files.length, "file")),
         h("span", { class: "num-add" }, `+${totalAdd}`),
         h("span", { class: "num-del" }, `−${totalDel}`),
-        reviewable.length !== files.length ? h("span", null, `${reviewable.length} worth reading`) : null,
+        reviewable.length !== files.length ? h("span", null, `${reviewable.length} to read, ${files.length - reviewable.length} mechanical or generated`) : null,
       ),
       bar,
       legend,
@@ -1895,9 +2023,60 @@ ul, ol { margin: 0; padding-left: 18px; }
     const facts = h("div", { class: "facts" }, left);
     if (recap.risk && ["low", "medium", "high"].includes(recap.risk.level)) {
       const lv = recap.risk.level;
-      facts.append(h("div", { class: `risk ${lv}` }, h("span", { class: "level" }, `${lv[0].toUpperCase()}${lv.slice(1)} risk`), recap.risk.why ? md(recap.risk.why, { inline: true }) : null));
+      const slot = h("div");
+      const draw = () =>
+        slot.replaceChildren(
+          blockFindingHidden("risk")
+            ? h("div", { class: "risk held-risk" }, h("span", { class: "level" }, "Agent's risk read"), h("span", null, "Held back until you've formed your own. ", h("button", { type: "button", class: "linklike", onclick: () => revealBlock("risk") }, "Show it")))
+            : h("div", { class: `risk ${lv}` }, h("span", { class: "level" }, `${lv[0].toUpperCase()}${lv.slice(1)} risk`), recap.risk.why ? md(recap.risk.why, { inline: true }) : null),
+        );
+      findingWatchers.add(draw);
+      draw();
+      facts.append(slot);
     }
     hero.append(facts);
+    const held = countFindings();
+    if (held) {
+      const notice = h("div");
+      const draw = () => {
+        if (!holdFindings()) return notice.replaceChildren();
+        notice.replaceChildren(
+          h(
+            "div",
+            { class: "held-notice" },
+            icon("eye"),
+            h(
+              "div",
+              null,
+              h("strong", null, "Your read first. "),
+              `The agent's ${plural(held, "finding")} (its risk read, the lines it flagged, and its risk callouts) ${held === 1 ? "is" : "are"} held back so ${held === 1 ? "it doesn't" : "they don't"} steer where you look. Each file's findings appear when you mark it Viewed.`,
+              h(
+                "div",
+                { class: "held-actions" },
+                h("button", { type: "button", class: "btn", onclick: revealAll }, "Show all findings now"),
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    class: "btn ghost",
+                    onclick: () => {
+                      prefs.findings = "always";
+                      savePrefs();
+                      rerenderAllDiffs();
+                      notifyFindings();
+                    },
+                  },
+                  "Always show them",
+                ),
+              ),
+            ),
+          ),
+        );
+      };
+      findingWatchers.add(draw);
+      draw();
+      hero.append(notice);
+    }
     return hero;
   }
 
@@ -1963,8 +2142,14 @@ ul, ol { margin: 0; padding-left: 18px; }
         const f = byPath.get(b.file);
         const [, base] = splitPath(b.file);
         const risky = (b.annotations || []).some((a) => a.kind === "risk");
+        const dot = risky ? h("span", { class: "badge-risk", title: "Has a risk note" }) : null;
+        if (dot) {
+          const draw = () => (dot.hidden = fileFindingsHidden(b.file));
+          findingWatchers.add(draw);
+          draw();
+        }
         const labelEl = [
-          risky ? h("span", { class: "badge-risk", title: "Has a risk note" }) : null,
+          dot,
           h("span", { class: "mono" }, b.label || base),
           f ? h("span", { class: "n" }, h("span", { class: "num-add" }, `+${f.additions}`), " ", h("span", { class: "num-del" }, `−${f.deletions}`)) : null,
         ];
@@ -2083,19 +2268,28 @@ ul, ol { margin: 0; padding-left: 18px; }
   }
 
   function renderFiles() {
-    const sec = sectionShell("files", "All files", `${plural(files.length, "file")} · open any row to see its full diff`);
+    const concerns = groups.filter((g) => !g.auto).length;
+    const sec = sectionShell("files", "All files", `${plural(files.length, "file")}${concerns > 1 ? ` in ${concerns} concerns` : ""}, in reading order · open any row to see its diff`);
     for (const g of groups) {
-      const wrap = h("div", { class: "fgroup" });
-      wrap.append(h("h3", null, h("i", { class: g.hatch ? "hatch" : "", style: { background: g.hatch ? "repeating-linear-gradient(135deg, var(--rule-strong) 0 2px, transparent 2px 4px)" : g.color, boxShadow: g.hatch ? "inset 0 0 0 1px var(--rule-strong)" : "" } }), g.name, h("small", null, `${plural(g.files.length, "file")}  +${g.adds} −${g.dels}`)));
+      const wrap = h("div", { class: `fgroup${g.auto ? " auto" : ""}`, id: g.id || null });
+      const rows = g.files.map(fileRow);
+      const swatch = h("i", { class: g.hatch ? "hatch" : "", style: { background: g.hatch ? "repeating-linear-gradient(135deg, var(--rule-strong) 0 2px, transparent 2px 4px)" : g.color, boxShadow: g.hatch ? "inset 0 0 0 1px var(--rule-strong)" : "" } });
+      wrap.append(
+        h(
+          "header",
+          null,
+          h("h3", null, swatch, g.name, h("small", null, `${plural(g.files.length, "file")}  +${g.adds} −${g.dels}`)),
+          g.files.length > 1 ? h("button", { type: "button", class: "linklike", onclick: () => rows.forEach((r) => r._open()) }, "Open all") : null,
+        ),
+      );
+      if (g.why) wrap.append(h("div", { class: "fwhy" }, md(g.why, { cls: "" })));
       const list = h("div", { class: "flist" });
-      for (const f of g.files) list.append(fileRow(f));
+      list.append(...rows);
       wrap.append(list);
       sec.append(wrap);
     }
     return sec;
   }
-
-  const PRIO_LABEL = { careful: "Read closely", skim: "Skim", skip: "Skip" };
   function fileRow(f) {
     const m = fileMeta(f.path);
     const [dir, base] = splitPath(f.path);
@@ -2128,15 +2322,16 @@ ul, ol { margin: 0; padding-left: 18px; }
         },
       },
       h("span", { class: "viewed-box" }, box),
-      h("span", { class: `prio ${m.review}` }, PRIO_LABEL[m.review] || m.review),
+      h("span", { class: `prio ${m.review}` }, TIER_LABEL[m.review] || m.review),
       h(
         "span",
         { class: "fp" },
         h("span", { class: "pth" }, f.status === "renamed" && f.oldPath ? h("span", { class: "dir" }, `${f.oldPath} → `) : null, h("span", { class: "dir" }, dir), base),
         " ",
         f.status !== "modified" ? h("span", { class: `chip ${f.status}`, style: { marginLeft: "4px" } }, f.status) : null,
-        f.generated ? h("span", { class: "chip generated", style: { marginLeft: "4px" } }, "generated") : null,
+        f.testFor ? h("span", { class: "chip test", style: { marginLeft: "4px" }, title: `Tests ${f.testFor}` }, `tests ${splitPath(f.testFor)[1]}`) : null,
         m.note ? h("span", { class: "fn" }, md(m.note, { inline: true })) : null,
+        m.proof ? h("span", { class: "fproof" }, icon("check"), md(m.proof, { inline: true })) : null,
       ),
       h("span", { class: "fc" }, h("span", { class: "num-add" }, `+${f.additions}`), h("span", { class: "num-del" }, `−${f.deletions}`)),
       h("span", { class: "chev" }, icon("chevronRight")),
@@ -2246,7 +2441,7 @@ ul, ol { margin: 0; padding-left: 18px; }
 
   // ───────────────────────────────────────────── top bar, sidebar, drawer
 
-  let sideEl, sideFilesEl, progressEl, progressLabel, feedbackCount;
+  let sideEl, sideFilesEl, progressEl, progressLabel, progressNote, feedbackCount;
   function renderTop() {
     const hasWire = Array.isArray(meta.types) ? meta.types.includes("wireframe") : JSON.stringify(recap).includes('"type":"wireframe"');
     const modeSeg = h(
@@ -2371,6 +2566,38 @@ ul, ol { margin: 0; padding-left: 18px; }
     progressEl = h("span");
     progressLabel = h("div", { class: "progress-label" });
     const prog = h("div", { class: "hr-side-block" }, h("h4", null, "Your progress"), h("div", { class: "progress" }, progressEl), progressLabel);
+    progressNote = h("div", { class: "side-note" });
+    prog.append(progressNote);
+    const findingsLine = h("div", { class: "side-note findings-line" });
+    if (countFindings()) {
+      const draw = () =>
+        findingsLine.replaceChildren(
+          ...(holdFindings()
+            ? [h("span", null, "Agent findings: after each file"), h("button", { type: "button", class: "linklike", onclick: revealAll }, "Show all")]
+            : [
+                h("span", null, "Agent findings: shown"),
+                prefs.findings === "always"
+                  ? h(
+                      "button",
+                      {
+                        type: "button",
+                        class: "linklike",
+                        title: "Hold the agent's findings back on reviews you haven't opened yet",
+                        onclick: () => {
+                          prefs.findings = "after";
+                          savePrefs();
+                          notifyFindings();
+                        },
+                      },
+                      "Hold back next time",
+                    )
+                  : null,
+              ].filter(Boolean)),
+        );
+      findingWatchers.add(draw);
+      draw();
+      prog.append(findingsLine);
+    }
     sideFilesEl = h("ul", { class: "side-files" });
     const filesBlock = h("div", { class: "hr-side-block" }, h("h4", null, "Files"), sideFilesEl);
     sideEl.append(toc, prog, filesBlock);
@@ -2384,7 +2611,10 @@ ul, ol { margin: 0; padding-left: 18px; }
   function renderSideFiles() {
     if (!sideFilesEl) return;
     sideFilesEl.textContent = "";
+    const firstOf = new Map(groups.map((g) => [g.files[0], g]));
     for (const f of orderedFiles) {
+      const g = firstOf.get(f);
+      if (g && groups.length > 1) sideFilesEl.append(h("li", { class: "grp" }, g.name));
       const m = fileMeta(f.path);
       const viewed = !!state.viewed[f.path];
       const n = state.comments.filter((c) => c.anchor.type === "line" && c.anchor.file === f.path).length;
@@ -2394,7 +2624,7 @@ ul, ol { margin: 0; padding-left: 18px; }
           { class: viewed ? "is-viewed" : "" },
           h(
             "a",
-            { href: "#", dataset: { ref: f.path }, title: `${f.path} — ${PRIO_LABEL[m.review] || ""}` },
+            { href: "#", dataset: { ref: f.path }, title: `${f.path} — ${TIER_LABEL[m.review] || ""}` },
             viewed ? h("span", { class: "viewed" }, icon("check")) : h("span", { class: `dot ${m.review}` }),
             h("span", { class: "nm" }, h("bdi", null, f.path)),
             n ? h("span", { class: "cm" }, String(n)) : null,
@@ -2415,8 +2645,9 @@ ul, ol { margin: 0; padding-left: 18px; }
       const done = reviewable.filter((f) => state.viewed[f.path]).length;
       const pct = reviewable.length ? Math.round((done / reviewable.length) * 100) : 100;
       progressEl.style.width = `${pct}%`;
-      const skipped = files.length - reviewable.length;
-      progressLabel.replaceChildren(...[h("span", null, `${done} of ${plural(reviewable.length, "file")} viewed`), skipped ? h("span", null, `${skipped} to skip`) : null].filter(Boolean));
+      const auto = files.length - reviewable.length;
+      progressLabel.replaceChildren(h("span", null, `${done} of ${plural(reviewable.length, "file")} viewed`));
+      progressNote.textContent = auto ? `Plus ${auto} mechanical or generated, each with a proof.` : "";
     }
   }
 
@@ -2564,7 +2795,9 @@ ul, ol { margin: 0; padding-left: 18px; }
     const manual = Array.isArray(recap.checks && recap.checks.manual) ? recap.checks.manual : [];
     if (manual.length) L.push(`- Manual checks done: ${manual.filter((m) => state.checks[hash(String(m))]).length} of ${manual.length}`);
     const viewed = reviewable.filter((f) => state.viewed[f.path]).length;
-    L.push(`- Files viewed: ${viewed} of ${reviewable.length}`);
+    const auto = files.length - reviewable.length;
+    L.push(`- Files viewed: ${viewed} of ${reviewable.length}${auto ? ` (plus ${auto} proven mechanical or generated)` : ""}`);
+    if (state.comments.length) L.push(`- Comments written before seeing the agent's findings: ${state.comments.filter((c) => c.blind).length} of ${state.comments.length}`);
     if (state.general && state.general.trim()) {
       L.push("", "## Overall", "", state.general.trim());
     }

@@ -6,9 +6,9 @@ single HTML page that a person can review in a few minutes.
 The page leads with the shape of the change, then drops into the code:
 
 - **Title, brief, and risk read**: what changed, for whom, and whether to worry.
-- **Footprint bar**: where the weight of the change sits (server vs. tests vs.
-  generated files), so you know at a glance how much of it actually needs
-  reading.
+- **Footprint bar**: where the weight of the change sits, concern by concern,
+  and how much of it is mechanical or generated, so you know at a glance how
+  much actually needs reading.
 - **Where to look, in order**: a reading path of three to six stops, each
   linked to the exact line.
 - **Visuals for what diffs are bad at**: before/after wireframes (sketch or
@@ -19,9 +19,16 @@ The page leads with the shape of the change, then drops into the code:
   unified views, word-level highlights, and expandable context.
 - **Before you approve**: the agent's open questions (answer them inline),
   what it actually verified, and a checklist of things to try yourself.
-- **All files**: every changed file, grouped and triaged as *read closely*,
-  *skim*, or *skip*, each expandable to its full diff, with a *Viewed*
-  checkbox and a progress bar.
+- **All files, by concern**: every changed file grouped by what it does
+  together (not by layer), in reading order, with each test right after the
+  code it tests. Files are triaged *read closely* or *skim*; anything the diff
+  proves needs no reading is tiered **mechanical** (renamed unchanged, or only
+  moved or re-indented lines) or **generated**, with the proof shown. Moved
+  lines are dimmed in diffs and labeled with where they came from.
+- **Your read first**: the agent's conclusions (its risk read, the lines it
+  flagged, risk callouts) are held back until you've viewed each file, so they
+  don't steer where you look. One click shows them all. The feedback export
+  notes which comments you wrote before seeing them.
 
 You can comment on any line or block, pick a verdict, and press **Copy
 feedback for the agent**. You get Markdown with file:line anchors that you
