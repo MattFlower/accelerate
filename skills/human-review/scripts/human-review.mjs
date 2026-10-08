@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const RUNTIME = process.versions.bun ? "bun" : "node";
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ASSETS = path.join(SKILL_DIR, "assets");
@@ -620,7 +620,7 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
   const histPath = (f) => f.oldPath || f.path;
   const paths = [...new Set(existing.sort((a, b) => b.additions + b.deletions - (a.additions + a.deletions)).map(histPath))].slice(0, MAX_HISTORY_PATHS);
   const raw = gitQuiet(
-    ["--literal-pathspecs", "log", baseSha, "--no-merges", "--no-renames", "--no-show-signature", `--since=${isoDay(new Date(new Date(since).getTime() - 86400_000))}`, "--format=%x1e%aN%x1f%aE%x1f%aI%x1f%s", "--name-only", "--", ...paths],
+    ["--literal-pathspecs", "log", baseSha, "--no-merges", "--no-renames", "--no-show-signature", `--since=${isoDay(new Date(new Date(since).getTime() - 86400_000))}`, "--format=%x1e%aN%x1f%aE%x1f%cI%x1f%s", "--name-only", "--", ...paths],
     { cwd: root },
   );
   if (raw === null) return (noHistory("reading history timed out or failed"), out);
