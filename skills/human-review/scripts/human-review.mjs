@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 const RUNTIME = process.versions.bun ? "bun" : "node";
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ASSETS = path.join(SKILL_DIR, "assets");
@@ -781,6 +781,20 @@ const BLAST_CHANGE = { removed: "removed", signature: "signature-changed", body:
 // Worth its own row: mentioned beyond the diff, defined twice, or removed but still named somewhere.
 const blastRow = (s) => s.outside.files > 0 || s.alsoDefined.length > 0 || (s.change === "removed" && (s.inChange.lines || s.testFiles || s.comments || s.docs));
 
+// A definition line up to its body: past the balanced parameter list, before the first `{` or a
+// trailing colon. Keeps destructured parameters; drops one-line bodies.
+function signatureOf(line) {
+  const t = line.trim();
+  let i = t.indexOf("(");
+  if (i >= 0)
+    for (let depth = 0; i < t.length; i++) {
+      if (t[i] === "(") depth++;
+      else if (t[i] === ")" && --depth === 0) break;
+    }
+  const brace = t.indexOf("{", Math.max(0, i));
+  return (brace > 0 ? t.slice(0, brace) : t).replace(/:\s*(#.*)?$/, "").trim();
+}
+
 function defAt(lang, s) {
   if (!s || s.length > 300) return null;
   for (const [re, kind] of DEF_PATTERNS[lang] || []) {
@@ -841,8 +855,9 @@ function changedSymbols(files, readOld, readNew) {
         const ln = l.t === "+" ? l.n : l.o;
         if (d.indent > 0 && !(lines && isOuterDef(lines, ln - 1, d))) continue;
         const map = l.t === "+" ? added : removed;
-        // Compare signatures, not one-line bodies: stop at the body's opening brace or colon.
-        const sig = l.s.trim().replace(/\s*(\{.*|:\s*(#.*)?)$/, "");
+        // Compare signatures, not one-line bodies: stop at the body's opening brace (the first one
+        // after the parameter list, so destructured parameters stay in) or a trailing colon.
+        const sig = signatureOf(l.s);
         if (!map.has(d.name)) map.set(d.name, { file: f.path, line: ln, kind: d.kind, text: sig, top: d.indent === 0 });
       }
     }
