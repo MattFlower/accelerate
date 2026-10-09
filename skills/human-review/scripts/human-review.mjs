@@ -694,6 +694,225 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
   return out;
 }
 
+// ───────────────────────────────────────────────────────────── blast radius
+//
+// Where the names this change defines, removes, or edits appear elsewhere at head. It's a text
+// search (`git grep -w`), so every claim is "mentioned", never "called": a same-named symbol
+// matches too, and dynamic calls don't. To stay worth reading it covers only languages whose
+// definitions can be spotted reliably, skips short and generic names, and says so when a name
+// is defined more than once or appears too widely to mean anything.
+const BLAST_LANGS = new Set(["javascript", "typescript", "python", "go", "ruby"]);
+const BLAST_MAX_NAMES = 40;
+const BLAST_MAX_AT = 8;
+const BLAST_COMMON_FILES = 60;
+const GENERIC_NAMES = new Set([
+  ...TRIVIAL_WORDS, "get", "set", "update", "render", "parse", "handle", "handler", "init", "main", "run", "start", "stop",
+  "call", "apply", "load", "save", "close", "open", "read", "write", "next", "test", "setup", "teardown", "constructor",
+  "tostring", "valueof", "index", "create", "delete", "remove", "process", "execute", "build", "make", "format", "validate",
+  "reset", "clear", "value", "data", "name", "type", "list", "item", "items", "config", "options", "props", "state",
+  "result", "error", "callback", "module", "exports", "require", "fetch", "send", "emit", "dispatch", "match", "check",
+  "convert", "transform", "serialize", "deserialize", "toJSON", "tojson", "equals", "hash", "copy", "clone", "size", "length",
+  "keys", "values", "entries", "push", "pop", "add", "has", "find", "filter", "map", "reduce", "sort", "merge", "wrap",
+]);
+const DEF_PATTERNS = {
+  javascript: [
+    [/^(\s*)(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_]\w*)/, "function"],
+    [/^(\s*)(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+([A-Za-z_]\w*)/, "type"],
+    [/^(\s*)(?:export\s+)?(?:declare\s+)?(?:interface|type|enum)\s+([A-Za-z_]\w*)/, "type"],
+    [/^()(?:export\s+)?(?:const|let|var)\s+([A-Za-z_]\w*)\s*(?::[^=]*)?=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*(?::[^=]*)?=>|[A-Za-z_]\w*\s*=>)/, "function"],
+    [/^(\s+)(?:(?:public|private|protected|static|async|readonly|override|abstract)\s+)*([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\([^)]*\)\s*(?::\s*[^={;]+)?\{\s*$/, "function"],
+  ],
+  python: [
+    [/^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)/, "function"],
+    [/^(\s*)class\s+([A-Za-z_]\w*)/, "type"],
+  ],
+  go: [
+    [/^()func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)/, "function"],
+    [/^()type\s+([A-Za-z_]\w*)/, "type"],
+  ],
+  ruby: [
+    [/^(\s*)def\s+(?:self\.)?([A-Za-z_]\w*)(?![?!=\w])/, "function"],
+    [/^(\s*)(?:class|module)\s+([A-Z]\w*)/, "type"],
+  ],
+};
+DEF_PATTERNS.typescript = DEF_PATTERNS.javascript;
+const NOT_A_METHOD = new Set(["if", "for", "while", "switch", "catch", "return", "function", "with", "else", "do", "try"]);
+const CONTAINER = /^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:class|interface|module|impl)\b/;
+const COMMENT_ONLY = /^\s*(\/\/|#|\*|\/\*|<!--|--\s|""")/;
+const NO_SNIPPET = /\.(pem|key|p12|pfx|crt|cer|der|keystore|jks)$/i;
+const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(changelog|changes|history|news)(\.|$)/i;
+
+function defAt(lang, s) {
+  if (!s || s.length > 300) return null;
+  for (const [re, kind] of DEF_PATTERNS[lang] || []) {
+    const m = re.exec(s);
+    if (m && !NOT_A_METHOD.has(m[2])) return { name: m[2], kind, indent: m[1].replace(/\t/g, "    ").length };
+  }
+  return null;
+}
+const indentOf = (s) => (/^\s*/.exec(s)[0] || "").replace(/\t/g, "    ").length;
+
+// The nearest line above `idx` (0-based) with less indentation that isn't blank, a comment, or a decorator.
+function parentLine(lines, idx, indent) {
+  for (let i = idx - 1, n = 0; i >= 0 && n < 3000; i--, n++) {
+    const s = lines[i];
+    if (!s.trim() || COMMENT_ONLY.test(s) || /^\s*@/.test(s)) continue;
+    if (indentOf(s) < indent) return s;
+  }
+  return null;
+}
+// A definition worth tracking: top-level, or directly inside a class or module (not a nested helper).
+const isOuterDef = (lines, idx, def) => def.indent === 0 || (lines && CONTAINER.test(parentLine(lines, idx, def.indent) || ""));
+
+// The outer definition enclosing a line at `indent`, looking upward from just above index `idx`.
+function enclosingDef(lang, lines, idx, indent) {
+  for (let i = idx - 1, n = 0; i >= 0 && n < 3000 && indent > 0; i--, n++) {
+    const s = lines[i];
+    if (!s.trim() || COMMENT_ONLY.test(s)) continue;
+    const ind = indentOf(s);
+    if (ind >= indent) continue;
+    indent = ind;
+    const d = defAt(lang, s);
+    if (d && isOuterDef(lines, i, d)) return { ...d, line: i + 1 };
+  }
+  return null;
+}
+
+function changedSymbols(files, readOld, readNew) {
+  const syms = new Map(); // name -> symbol
+  const add = (name, info, rank) => {
+    if (name.length < 4 || GENERIC_NAMES.has(name.toLowerCase())) return;
+    const cur = syms.get(name);
+    if (!cur || rank < cur.rank) syms.set(name, { name, rank, ...info });
+  };
+  const added = new Map();
+  const removed = new Map();
+  for (const f of files) {
+    const lang = f.language;
+    if (!BLAST_LANGS.has(lang) || f.generated || f.mechanical || f.binary || isTestPath(f.path)) continue;
+    let newLines, oldLines;
+    const nl = () => (newLines ??= (f.status === "deleted" ? null : readNew(f.path))?.split("\n") || null);
+    const ol = () => (oldLines ??= (f.status === "added" ? null : readOld(f.oldPath || f.path))?.split("\n") || null);
+    for (const h of f.hunks) {
+      for (const l of h.lines) {
+        if (l.t === " " || l.mv) continue;
+        const d = defAt(lang, l.s);
+        if (!d) continue;
+        const lines = l.t === "+" ? nl() : ol();
+        const ln = l.t === "+" ? l.n : l.o;
+        if (d.indent > 0 && !(lines && isOuterDef(lines, ln - 1, d))) continue;
+        const map = l.t === "+" ? added : removed;
+        // Compare signatures, not one-line bodies: stop at the body's opening brace or colon.
+        const sig = l.s.trim().replace(/\s*(\{.*|:\s*(#.*)?)$/, "");
+        if (!map.has(d.name)) map.set(d.name, { file: f.path, line: ln, kind: d.kind, text: sig });
+      }
+    }
+  }
+  for (const [name, r] of removed) {
+    const a = added.get(name);
+    if (!a) add(name, { kind: r.kind, change: "removed", file: r.file, line: r.line, side: "old" }, 0);
+    else if (a.text !== r.text) add(name, { kind: a.kind, change: "signature", file: a.file, line: a.line, side: "new" }, 1);
+    else add(name, { kind: a.kind, change: "body", file: a.file, line: a.line, side: "new" }, 2);
+  }
+  for (const [name, a] of added) if (!removed.has(name)) add(name, { kind: a.kind, change: "added", file: a.file, line: a.line, side: "new" }, 3);
+  // Bodies that changed inside an outer definition.
+  for (const f of files) {
+    const lang = f.language;
+    if (!BLAST_LANGS.has(lang) || f.generated || f.mechanical || f.binary || isTestPath(f.path) || f.status === "deleted") continue;
+    let lines = null;
+    for (const h of f.hunks) {
+      let anchor = null;
+      for (const l of h.lines) {
+        if (l.n !== undefined) anchor = l.n;
+        if (l.t === " " || l.mv || !l.s.trim() || COMMENT_ONLY.test(l.s)) continue;
+        // A removed line sat just after the last new-side line seen.
+        const idx = l.t === "+" ? l.n - 1 : anchor ?? h.newStart - 1;
+        lines ??= readNew(f.path)?.split("\n") || [];
+        const d = enclosingDef(lang, lines, idx, indentOf(l.s));
+        if (d && !added.has(d.name) && !removed.has(d.name)) add(d.name, { kind: d.kind, change: "body", file: f.path, line: d.line, side: "new" }, 2);
+      }
+    }
+  }
+  return [...syms.values()].sort((a, b) => a.rank - b.rank).slice(0, BLAST_MAX_NAMES);
+}
+
+function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOld, readNew, redact }) {
+  const out = { symbols: [], tests: { mentioning: [], unmentioned: [] }, notes: [] };
+  const syms = changedSymbols(files, readOld, readNew);
+  if (!syms.length) return out;
+  const args = ["grep", "-I", "-n", "-z", "-w", "-F", ...syms.flatMap((s) => ["-e", s.name])];
+  if (worktree) {
+    if (untracked.length) args.push("--untracked");
+  } else args.push(headSha);
+  const raw = gitQuiet([...args, "--"], { cwd: root });
+  if (raw === null) {
+    out.notes.push("Blast radius left out: searching the repository failed or timed out.");
+    return out;
+  }
+  const inChange = new Set(files.flatMap((f) => [f.path, f.oldPath].filter(Boolean)));
+  const prefix = worktree ? "" : `${headSha}:`;
+  const word = new Map(syms.map((s) => [s.name, new RegExp(`(?<![\\w$])${s.name}(?![\\w$])`)]));
+  const acc = new Map(syms.map((s) => [s.name, { out: [], outLines: 0, outFiles: new Set(), inFiles: new Set(), inLines: 0, tests: new Set(), alsoDefined: [], comments: 0, docs: 0 }]));
+  const repoTests = new Set();
+  for (const rec of raw.split("\n")) {
+    if (!rec) continue;
+    const [rp, ln, text = ""] = rec.split("\0");
+    const p = rp.startsWith(prefix) ? rp.slice(prefix.length) : rp;
+    const line = Number(ln);
+    if (!p || p.startsWith(".human-review/") || (outRel && (p === outRel || p.startsWith(outRel + "/")))) continue;
+    if (generatedReason(p) || text.length > 400) continue;
+    const lang = languageFor(p);
+    for (const s of syms) {
+      if (!word.get(s.name).test(text)) continue;
+      const a = acc.get(s.name);
+      if (DOC_FILE.test(p)) { a.docs++; continue; }
+      if (COMMENT_ONLY.test(text)) { a.comments++; continue; }
+      const d = BLAST_LANGS.has(lang) ? defAt(lang, text) : null;
+      if (d && d.name === s.name) {
+        if (!(p === s.file && line === s.line && s.side === "new")) a.alsoDefined.push(`${p}:${line}`);
+        continue;
+      }
+      if (isTestPath(p)) { a.tests.add(p); repoTests.add(p); continue; }
+      if (inChange.has(p)) { a.inFiles.add(p); a.inLines++; continue; }
+      a.outFiles.add(p);
+      a.outLines++;
+      if (a.out.length < BLAST_MAX_AT) {
+        const hide = isEnvFile(p) || CONFIG_FILE.test(p) || NO_SNIPPET.test(p) || mayHoldKey(text);
+        a.out.push({ path: p, line, text: hide ? null : redact(text.trim(), p).slice(0, 160) });
+      }
+    }
+  }
+  for (const s of syms) {
+    const a = acc.get(s.name);
+    const common = a.outFiles.size > BLAST_COMMON_FILES;
+    out.symbols.push({
+      name: s.name,
+      kind: s.kind,
+      change: s.change,
+      file: s.file,
+      line: s.line,
+      side: s.side,
+      outside: { files: a.outFiles.size, lines: a.outLines, at: common ? [] : a.out },
+      inChange: { files: a.inFiles.size, lines: a.inLines },
+      tests: [...a.tests].sort().slice(0, 5),
+      testFiles: a.tests.size,
+      alsoDefined: a.alsoDefined.slice(0, 3),
+      common,
+      comments: a.comments,
+      docs: a.docs,
+    });
+  }
+  const order = { removed: 0, signature: 1, body: 2, added: 3 };
+  out.symbols.sort((x, y) => order[x.change] - order[y.change] || y.outside.files - x.outside.files || x.name.localeCompare(y.name));
+  out.tests.mentioning = [...repoTests].sort().slice(0, 8);
+  out.tests.total = repoTests.size;
+  // Only worth saying when the repo's tests mention some of the change: otherwise there are no tests to speak of.
+  if (repoTests.size)
+    out.tests.unmentioned = out.symbols.filter((s) => s.kind === "function" && s.change !== "removed" && !s.testFiles).map((s) => s.name).slice(0, 8);
+  out.cmd = `git grep -n -w -F -e <name> ${worktree ? "" : headSha.slice(0, 10)}`.trim();
+  return out;
+}
+
 function linguistGenerated(root, paths) {
   if (!paths.length) return new Set();
   const r = spawnSync("git", ["check-attr", "-z", "linguist-generated", "linguist-vendored", "--stdin"], {
@@ -1057,6 +1276,15 @@ function collect(opts) {
         .map(([sha, author, date, subject]) => ({ sha, author, date, subject: redact(subject, null) }))
     : [];
 
+  const blast = blastRadius(root, files, {
+    headSha,
+    worktree,
+    untracked,
+    outRel,
+    readOld: (p) => (baseIsTree ? null : readFileAt(root, { sha: baseSha }, p)),
+    readNew: (p) => readFileAt(root, { sha: headSha, worktree }, p),
+    redact,
+  });
   const signals = historySignals(root, files, { baseSha: baseIsTree ? null : baseSha, logRange, worktree, redact });
 
   const remote = (git(["remote", "get-url", "origin"], { cwd: root, allowFail: true }) || "").trim();
@@ -1094,6 +1322,7 @@ function collect(opts) {
     fingerprint,
     redactions: redact.count(),
     signals,
+    blast,
     commits,
     files,
   };
@@ -1152,6 +1381,20 @@ function renderReviewText(diff) {
       if (i.cmd) out.push(`#       reproduce: ${i.cmd}`);
     }
     for (const n of sig.notes) out.push(`#   (${n})`);
+  }
+  const br = diff.blast || { symbols: [] };
+  if (br.symbols.length) {
+    out.push("#");
+    out.push("# Blast radius: where changed names appear at head (git grep -w; mentions, not proven calls).");
+    out.push("# Read the outside mentions that matter and show them with `code` blocks; don't restate this list:");
+    const quiet = br.symbols.filter((s) => !s.outside.files && s.change !== "removed");
+    if (quiet.length) out.push(`#   only mentioned inside this change: ${quiet.map((s) => s.name).join(", ")}`);
+    for (const s of br.symbols.filter((x) => !quiet.includes(x))) {
+      const where = s.outside.files
+        ? `${s.outside.lines} line(s) in ${s.outside.files} file(s) outside this change${s.common ? " (common name)" : `: ${s.outside.at.map((x) => `${x.path}:${x.line}`).join(", ")}${s.outside.lines > s.outside.at.length ? ", …" : ""}`}`
+        : "no mentions outside this change";
+      out.push(`#   ${s.change} ${s.kind} ${s.name} (${s.file}:${s.line}${s.side === "old" ? " old" : ""}): ${where}; ${s.testFiles} test file(s)${s.alsoDefined.length ? `; also defined at ${s.alsoDefined.join(", ")}` : ""}`);
+    }
   }
   out.push("");
   for (const f of diff.files) {
@@ -1231,7 +1474,7 @@ const CALLOUT_KINDS = new Set(["note", "risk", "breaking", "decision", "question
 const SURFACES = new Set(["browser", "desktop", "mobile", "popover", "panel", "bare"]);
 const TEXT_KEYS = new Set(["md", "html", "css", "source", "brief", "intro", "why", "summary", "note", "caption", "text"]);
 // Ids the page itself uses; recap ids must not shadow them.
-const RESERVED_IDS = new Set(["top", "main", "app", "overview", "ask", "signals", "key-changes", "checks", "wrap-up", "files", "hr-data", "hr-title", "hr-top-title"]);
+const RESERVED_IDS = new Set(["top", "main", "app", "overview", "ask", "signals", "key-changes", "blast-radius", "checks", "wrap-up", "files", "hr-data", "hr-title", "hr-top-title"]);
 const isReservedId = (id) => RESERVED_IDS.has(id) || /^(file-|t\d+-|v-|mmd\d)/.test(id);
 const VALID_ID = /^[A-Za-z][\w-]*$/;
 // Tags the renderer strips together with everything inside them.
@@ -1629,6 +1872,7 @@ function validate(recap, diff, recapDir) {
   if ((recap.summary || []).length || (recap.focus || []).length || (recap.tests && ((recap.tests.covers || []).length || (recap.tests.doesNotCover || []).length))) builtIn.add("overview");
   if ((recap.ask || []).length) builtIn.add("ask");
   if ((recap.keyChanges || []).length) builtIn.add("key-changes");
+  if ((diff.blast?.symbols || []).length || (diff.blast?.notes || []).length) builtIn.add("blast-radius");
   if ((recap.questions || []).length || (recap.checks?.verified || []).length || (recap.checks?.manual || []).length) builtIn.add("checks");
   if (recap.focus !== undefined) {
     if (!Array.isArray(recap.focus)) err("focus", "must be an array");

@@ -78,7 +78,9 @@ a line like `⚑ check this for security (line 42): …`. The page shows the sam
 question to the reviewer at that line. Look at the spot yourself (see "Security
 cues" below). The header of `review.txt` also lists **signals**: facts the CLI computed from
 git history and file paths (see "Signals" below; read it before you choose
-`risk.level`). Open surrounding source when a hunk doesn't make sense
+`risk.level`), and a **blast radius**: for each function or type the change
+defines, edits, or removes, where its name appears elsewhere at head (see
+"Blast radius" below). Open surrounding source when a hunk doesn't make sense
 on its own: callers, types, the rest of a component. Read the commit messages
 and the PR description (`--pr` includes it in `diff.json`).
 
@@ -344,6 +346,28 @@ file. A row appears only when it says something, and there is no score.
 - Signals are left out, with a note, on a shallow clone or when history can't be
   read in time. Don't fill the gap by guessing.
 
+### Blast radius
+
+For JavaScript, TypeScript, Python, Go, and Ruby, `collect` finds the top-level
+and class-level functions and types the change adds, removes, or edits, and
+searches the repo at head for each name (`git grep -w`). The page shows a "Blast
+radius" section after Key changes: for each name, the lines outside the change
+that mention it (with the line text), how many test files mention it, a note
+when the name is defined twice or is too common to mean much, and which changed
+functions no test file mentions. It's a text search, so it says "mentioned", not
+"called". Short and generic names (`get`, `render`, `parse`) are skipped. You
+can't edit it.
+
+- Use it to decide what to read **outside** the diff. Open the mentions that
+  matter, especially for a `removed` name that's still mentioned or a
+  `signature changed` function mentioned in files this change didn't touch.
+- Before you write a `risk` annotation from it, open the line and confirm it's
+  the same symbol and not a same-named one.
+- To show the reviewer a caller, use a `code` block. It can show any file at
+  head, with annotations.
+- Don't restate the list in prose. Point a `focus` stop at `#blast-radius` only
+  if the outside callers are where the review should go.
+
 ### Key changes
 
 `keyChanges` holds **three to eight** files that carry the change, ordered the
@@ -425,6 +449,9 @@ that fails:
    in a held-back kind. Reword anything visible that gives a verdict away.
 5. **Worth the reviewer's trust?** One wrong or noisy note makes them discount
    the rest. Silence beats a weak note, and a file with no annotations is fine.
+
+The same goes for anything you take from the blast radius: a mention is not a
+call until you've read the line.
 
 Also re-open every `path:line` you cite in prose (focus, summaries, notes):
 `build --check` verifies annotation lines but not what a prose citation says.

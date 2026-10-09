@@ -19,7 +19,7 @@ Conventions:
   using only letters, digits, `-` and `_`. Give one to blocks you reference
   from `focus` (`"ref": "#schema"`). The others get ids derived from their
   content. The page reserves `top`, `main`, `app`, `overview`, `key-changes`,
-  `ask`, `checks`, `wrap-up`, `files`, `hr-data`, `hr-title`, and `hr-top-title`, and ids
+  `ask`, `signals`, `blast-radius`, `checks`, `wrap-up`, `files`, `hr-data`, `hr-title`, and `hr-top-title`, and ids
   starting with `file-`, `v-`, `mmd` plus a digit, or `t` plus digits and `-`.
 - The page loads nothing from the network: its Content-Security-Policy blocks
   remote images, fonts, and stylesheets. Show screenshots with `screenshot`
@@ -71,7 +71,7 @@ Conventions:
 | `ask[]` | Up to three short lines on the kind of feedback wanted, shown under the brief as "What I need from you". Visible from the start, so describe what you want; don't state a finding. |
 | `tests` | `covers` and `doesNotCover`, each a list of strings. Facts about the tests in this change, shown in the overview. Visible from the start. |
 | `notExamined[]` | What the agent did not look at or could not run. **Held back**: it opens with the other findings once every file is viewed (or on "Show all"), under "Before you sign off", beside an "Anything else?" box whose text goes into the feedback. |
-| `focus[].ref` | `"path:line"`, `"path:start-end"`, `"path"`, or `"#block-or-section-id"`. Built-in section ids: `overview`, `ask`, `key-changes`, `checks`, `files`. (`wrap-up` is reserved but never a ref target: it opens only after the reviewer's pass.) A custom section's id is its slugified title unless you set `id`. |
+| `focus[].ref` | `"path:line"`, `"path:start-end"`, `"path"`, or `"#block-or-section-id"`. Built-in section ids: `overview`, `ask`, `key-changes`, `blast-radius` (when the change has one), `checks`, `files`. (`wrap-up` is reserved but never a ref target: it opens only after the reviewer's pass.) A custom section's id is its slugified title unless you set `id`. |
 | `sections[]` | Rendered in order between the overview and key changes. Each needs a `title` and `blocks`; `id` and `intro` are optional. |
 | `keyChanges[]` | `diff` blocks (the `type` can be omitted) or `code` blocks. Rendered as tabs, in order. |
 | `concerns[]` | `title` (required), `why` (one line, markdown), and `files` in reading order: interfaces and schema before the code that uses them, each test right after the code it tests. Every file belongs to at most one concern. Concerns drive the All files section, the sidebar, and the footprint bar, and each gets an id `c-<slugified title>` usable in focus refs. Files in no concern are listed under "Other changes" (the build warns). Leave mechanical and generated files out; they get their own groups. |

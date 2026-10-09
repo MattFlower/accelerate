@@ -2258,6 +2258,89 @@ ul, ol { margin: 0; padding-left: 18px; }
     return out;
   }
 
+  // Where the names this change defines, edits, or removes appear elsewhere at head. A text search
+  // (git grep -w), so the page says "mentioned", never "called".
+  const CHANGE_LABEL = { removed: "removed", signature: "signature changed", body: "body changed", added: "new" };
+  function renderBlastRadius() {
+    const br = diff.blast;
+    const syms = br && Array.isArray(br.symbols) ? br.symbols : [];
+    const notes = br && Array.isArray(br.notes) ? br.notes : [];
+    if (!syms.length && !notes.length) return null;
+    const rows = syms.filter((s) => s.outside.files > 0 || (s.change === "removed" && (s.inChange.lines || s.testFiles)));
+    const gone = syms.filter((s) => s.change === "removed" && !rows.includes(s));
+    const contained = syms.filter((s) => !rows.includes(s) && !gone.includes(s));
+    const sec = sectionShell("blast-radius", "Blast radius", "Where the changed names appear elsewhere at head");
+    const loc = (p, line) => (byPath.has(p) ? h("a", { href: "#", class: "hr-ref", dataset: { ref: `${p}:${line}` } }, h("code", null, `${p}:${line}`)) : h("code", null, `${p}:${line}`));
+    const names = (list) => list.map((s, i) => [i ? ", " : "", h("code", null, s.name)]);
+    const el = h("div", { class: "blast" });
+    el.append(
+      h(
+        "p",
+        { class: "blast-lede" },
+        tagChip("verified", `Found with ${br.cmd || "git grep -w"}. Lines that contain the name as a whole word, at the head commit. A same-named symbol elsewhere matches too, and dynamic calls don't.`),
+        "Lines that mention each name, found by text search. A mention isn't proof of a call. Comments and docs aren't counted.",
+      ),
+    );
+    if (rows.length)
+      el.append(
+        h(
+          "ul",
+          { class: "blast-rows" },
+          rows.map((s) => {
+            const facts = [];
+            if (s.outside.files) facts.push(`Mentioned on ${plural(s.outside.lines, "line")} in ${plural(s.outside.files, "file")} outside this change`);
+            if (s.inChange.lines) facts.push(`${plural(s.inChange.lines, "line")} in changed files`);
+            facts.push(s.testFiles ? `${plural(s.testFiles, "test file")}` : "no test file");
+            const caveats = [];
+            if (s.common) caveats.push("The name is common, so many of these may be unrelated.");
+            if (s.alsoDefined.length) caveats.push(`Also defined at ${s.alsoDefined.join(", ")}, so some mentions may be that one.`);
+            const at = s.outside.at || [];
+            return h(
+              "li",
+              { class: `blast-row ch-${s.change}` },
+              h(
+                "div",
+                { class: "blast-head" },
+                h("code", { class: "blast-name" }, s.name),
+                h("span", { class: "chip" }, s.kind),
+                h("span", { class: "blast-ch" }, CHANGE_LABEL[s.change] || s.change),
+                s.side === "new" ? loc(s.file, s.line) : h("span", { class: "blast-def" }, h("code", null, s.file), " (removed)"),
+              ),
+              h("div", { class: "blast-facts" }, facts.join(" · "), "."),
+              caveats.length ? h("div", { class: "blast-caveat" }, caveats.join(" ")) : null,
+              at.length
+                ? h(
+                    "details",
+                    null,
+                    h("summary", null, s.outside.lines > at.length ? `First ${at.length} of ${s.outside.lines} mentions` : `Show ${plural(at.length, "mention")}`),
+                    h("ul", { class: "blast-at" }, at.map((x) => h("li", null, loc(x.path, x.line), x.text != null ? h("code", { class: "snip" }, x.text) : h("span", { class: "snip muted" }, "(line not shown: config or key file)")))),
+                  )
+                : null,
+            );
+          }),
+        ),
+      );
+    if (gone.length) el.append(h("p", { class: "blast-more" }, "Removed, and no longer mentioned anywhere: ", names(gone), "."));
+    if (contained.length)
+      el.append(h("p", { class: "blast-more" }, "Changed, and mentioned only inside this change: ", names(contained.slice(0, 12)), contained.length > 12 ? `, and ${contained.length - 12} more` : "", "."));
+    const t = br.tests || {};
+    if ((t.mentioning || []).length)
+      el.append(
+        h(
+          "p",
+          { class: "blast-more" },
+          "Test files that mention changed code: ",
+          t.mentioning.map((p, i) => [i ? ", " : "", byPath.has(p) ? h("a", { href: "#", class: "hr-ref", dataset: { ref: p } }, h("code", null, p)) : h("code", null, p)]),
+          t.total > t.mentioning.length ? `, and ${t.total - t.mentioning.length} more` : "",
+          ".",
+        ),
+      );
+    if ((t.unmentioned || []).length) el.append(h("p", { class: "blast-more" }, "Changed functions no test file mentions: ", t.unmentioned.map((n, i) => [i ? ", " : "", h("code", null, n)]), "."));
+    for (const n of notes) el.append(h("p", { class: "signals-note" }, n));
+    sec.append(el);
+    return sec;
+  }
+
   function renderKeyChanges() {
     keyBlocks = (recap.keyChanges || []).map((b) => ({ type: "diff", ...b }));
     if (!keyBlocks.length) return null;
@@ -3006,6 +3089,8 @@ ul, ol { margin: 0; padding-left: 18px; }
     for (const s of renderSections()) inner.append(s);
     const kc = renderKeyChanges();
     if (kc) inner.append(kc);
+    const br = renderBlastRadius();
+    if (br) inner.append(br);
     const ch = renderChecks();
     if (ch) inner.append(ch);
     inner.append(renderFiles());

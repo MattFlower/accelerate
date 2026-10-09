@@ -31,6 +31,11 @@ The page leads with the shape of the change, then drops into the code:
   question at that line ("Is `canShare` applied on every path that reaches
   this code?"). These are computed from the diff, rare (five at most), and
   never a checklist.
+- **Blast radius**: for each function or type the change adds, edits, or
+  removes (JavaScript, TypeScript, Python, Go, Ruby), the lines elsewhere in the
+  repo that mention its name, with the code shown, and which tests mention it.
+  A removed function whose name is still in use stands out. It's a text search
+  and says so: "mentioned", never "called".
 - **Before you approve**: the agent's open questions (answer them inline),
   what it actually verified, and a checklist of things to try yourself.
 - **All files, by concern**: every changed file grouped by what it does

@@ -301,6 +301,27 @@ button.linklike:hover { text-decoration: underline; text-underline-offset: 2px; 
 .tests-note { grid-column: 1 / -1; padding-top: 26px; border-top: 1px solid var(--rule); }
 .tests-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 48px; }
 .tests-note h4 { margin: 0 0 8px; font-size: 13.5px; font-weight: 650; color: var(--ink-2); }
+.blast { display: grid; gap: 14px; max-width: 92ch; }
+.blast-lede { margin: 0; color: var(--muted); font-size: 13.5px; }
+.blast-lede .tag { margin-right: 8px; }
+.blast-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border-top: 1px solid var(--rule); }
+.blast-row { padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.blast-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 10px; }
+.blast-name { font-weight: 650; font-size: 14px; color: var(--ink); }
+.blast-ch { font-size: 12.5px; color: var(--ink-2); }
+.blast-row.ch-removed .blast-ch { font-weight: 650; }
+.blast-head a, .blast-def { font-size: 12.5px; color: var(--muted); }
+.blast-facts { margin-top: 4px; font-size: 14px; color: var(--ink-2); }
+.blast-caveat { margin-top: 2px; font-size: 13px; color: var(--muted); }
+.blast details { margin-top: 6px; font-size: 13px; }
+.blast summary { cursor: pointer; color: var(--link); width: max-content; }
+.blast-at { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.blast-at li { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px; align-items: baseline; }
+.blast-at code { font-size: 12.5px; }
+.blast-at .snip { color: var(--ink-2); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.blast-at .snip.muted { color: var(--muted); font-style: italic; white-space: normal; }
+.blast-more { margin: 0; font-size: 14px; color: var(--ink-2); }
+@media (max-width: 600px) { .blast-at li { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 .signals { margin-top: 18px; max-width: 78ch; }
 .signals h3 { margin: 0 0 8px; font-size: 13.5px; font-weight: 650; color: var(--ink-2); }
 .signals ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: baseline; font-size: 14px; line-height: 1.5; color: var(--ink-2); }
