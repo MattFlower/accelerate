@@ -742,6 +742,10 @@ const COMMENT_ONLY = /^\s*(\/\/|#|\*|\/\*|<!--|--\s|""")/;
 const NO_SNIPPET = /\.(pem|key|p12|pfx|crt|cer|der|keystore|jks)$/i;
 const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(changelog|changes|history|news)(\.|$)/i;
 
+const BLAST_CHANGE = { removed: "removed", signature: "signature-changed", body: "body-changed", added: "new" };
+// Worth its own row: mentioned beyond the diff, defined twice, or removed but still named somewhere.
+const blastRow = (s) => s.outside.files > 0 || s.alsoDefined.length > 0 || (s.change === "removed" && (s.inChange.lines || s.testFiles || s.comments || s.docs));
+
 function defAt(lang, s) {
   if (!s || s.length > 300) return null;
   for (const [re, kind] of DEF_PATTERNS[lang] || []) {
@@ -851,7 +855,9 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
     out.notes.push("Blast radius left out: searching the repository failed or timed out.");
     return out;
   }
-  const inChange = new Set(files.flatMap((f) => [f.path, f.oldPath].filter(Boolean)));
+  // New-side lines the page shows in each changed file's diff. A mention anywhere else (another
+  // file, or an unchanged stretch of a changed file) is one the reviewer won't see on the page.
+  const shown = new Map(files.map((f) => [f.path, new Set(f.hunks.flatMap((h) => h.lines.map((l) => l.n).filter((n) => n !== undefined)))]));
   const prefix = worktree ? "" : `${headSha}:`;
   const word = new Map(syms.map((s) => [s.name, new RegExp(`(?<![\\w$])${s.name}(?![\\w$])`)]));
   const acc = new Map(syms.map((s) => [s.name, { out: [], outLines: 0, outFiles: new Set(), inFiles: new Set(), inLines: 0, tests: new Set(), alsoDefined: [], comments: 0, docs: 0 }]));
@@ -875,7 +881,7 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
         continue;
       }
       if (isTestPath(p)) { a.tests.add(p); repoTests.add(p); continue; }
-      if (inChange.has(p)) { a.inFiles.add(p); a.inLines++; continue; }
+      if (shown.get(p)?.has(line)) { a.inFiles.add(p); a.inLines++; continue; }
       a.outFiles.add(p);
       a.outLines++;
       if (a.out.length < BLAST_MAX_AT) {
@@ -1387,15 +1393,16 @@ function renderReviewText(diff) {
   const br = diff.blast || { symbols: [] };
   if (br.symbols.length) {
     out.push("#");
-    out.push("# Blast radius: where changed names appear at head (git grep -w; mentions, not proven calls).");
-    out.push("# Read the outside mentions that matter and show them with `code` blocks; don't restate this list:");
-    const quiet = br.symbols.filter((s) => !s.outside.files && s.change !== "removed");
-    if (quiet.length) out.push(`#   only mentioned inside this change: ${quiet.map((s) => s.name).join(", ")}`);
-    for (const s of br.symbols.filter((x) => !quiet.includes(x))) {
+    out.push("# Blast radius: where changed names appear at head, outside the diff's lines (git grep -w;");
+    out.push("# mentions, not proven calls). Read the ones that matter and show them with `code` blocks; don't restate this list:");
+    const quiet = br.symbols.filter((s) => !blastRow(s));
+    if (quiet.length) out.push(`#   mentioned only in the diff: ${quiet.map((s) => s.name).join(", ")}`);
+    for (const s of br.symbols.filter(blastRow)) {
       const where = s.outside.files
-        ? `${s.outside.lines} line(s) in ${s.outside.files} file(s) outside this change${s.common ? " (common name)" : `: ${s.outside.at.map((x) => `${x.path}:${x.line}`).join(", ")}${s.outside.lines > s.outside.at.length ? ", …" : ""}`}`
-        : "no mentions outside this change";
-      out.push(`#   ${s.change} ${s.kind} ${s.name} (${s.file}:${s.line}${s.side === "old" ? " old" : ""}): ${where}; ${s.testFiles} test file(s)${s.alsoDefined.length ? `; also defined at ${s.alsoDefined.join(", ")}` : ""}`);
+        ? `${s.outside.lines} line(s) in ${s.outside.files} file(s) outside the diff${s.common ? " (common name)" : `: ${s.outside.at.map((x) => `${x.path}:${x.line}`).join(", ")}${s.outside.lines > s.outside.at.length ? ", …" : ""}`}`
+        : "no code mentions outside the diff";
+      const extra = [s.comments ? `${s.comments} comment line(s)` : "", s.docs ? `${s.docs} doc line(s)` : ""].filter(Boolean).join(", ");
+      out.push(`#   ${BLAST_CHANGE[s.change]} ${s.kind} ${s.name} (${s.file}:${s.line}${s.side === "old" ? " old" : ""}): ${where}; ${s.testFiles} test file(s)${extra ? `; also ${extra}` : ""}${s.alsoDefined.length ? `; also defined at ${s.alsoDefined.join(", ")}` : ""}`);
     }
   }
   out.push("");

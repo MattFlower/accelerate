@@ -2266,7 +2266,8 @@ ul, ol { margin: 0; padding-left: 18px; }
     const syms = br && Array.isArray(br.symbols) ? br.symbols : [];
     const notes = br && Array.isArray(br.notes) ? br.notes : [];
     if (!syms.length && !notes.length) return null;
-    const rows = syms.filter((s) => s.outside.files > 0 || (s.change === "removed" && (s.inChange.lines || s.testFiles)));
+    // Same rule as the CLI's: mentioned beyond the diff, defined twice, or removed but still named somewhere.
+    const rows = syms.filter((s) => s.outside.files > 0 || (s.alsoDefined || []).length > 0 || (s.change === "removed" && (s.inChange.lines || s.testFiles || s.comments || s.docs)));
     const gone = syms.filter((s) => s.change === "removed" && !rows.includes(s));
     const contained = syms.filter((s) => !rows.includes(s) && !gone.includes(s));
     const sec = sectionShell("blast-radius", "Blast radius", "Where the changed names appear elsewhere at head");
@@ -2278,7 +2279,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         "p",
         { class: "blast-lede" },
         tagChip("verified", `Found with ${br.cmd || "git grep -w"}. Lines that contain the name as a whole word, at the head commit. A same-named symbol elsewhere matches too, and dynamic calls don't.`),
-        "Lines that mention each name, found by text search. A mention isn't proof of a call. Comments and docs aren't counted.",
+        "Lines that mention each name outside the lines this page shows, found by text search. A mention isn't proof of a call. Comment and doc lines are counted separately.",
       ),
     );
     if (rows.length)
@@ -2288,9 +2289,11 @@ ul, ol { margin: 0; padding-left: 18px; }
           { class: "blast-rows" },
           rows.map((s) => {
             const facts = [];
-            if (s.outside.files) facts.push(`Mentioned on ${plural(s.outside.lines, "line")} in ${plural(s.outside.files, "file")} outside this change`);
-            if (s.inChange.lines) facts.push(`${plural(s.inChange.lines, "line")} in changed files`);
+            facts.push(s.outside.files ? `Mentioned on ${plural(s.outside.lines, "line")} in ${plural(s.outside.files, "file")} outside the diff` : "No code mentions outside the diff");
+            if (s.inChange.lines) facts.push(`${plural(s.inChange.lines, "line")} in the diff`);
             facts.push(s.testFiles ? `${plural(s.testFiles, "test file")}` : "no test file");
+            if (s.comments) facts.push(plural(s.comments, "comment line"));
+            if (s.docs) facts.push(`${plural(s.docs, "line")} in docs`);
             const caveats = [];
             if (s.common) caveats.push("The name is common, so many of these may be unrelated.");
             if (s.alsoDefined.length) caveats.push(`Also defined at ${s.alsoDefined.join(", ")}, so some mentions may be that one.`);
@@ -2322,7 +2325,7 @@ ul, ol { margin: 0; padding-left: 18px; }
       );
     if (gone.length) el.append(h("p", { class: "blast-more" }, "Removed, and no longer mentioned anywhere: ", names(gone), "."));
     if (contained.length)
-      el.append(h("p", { class: "blast-more" }, "Changed, and mentioned only inside this change: ", names(contained.slice(0, 12)), contained.length > 12 ? `, and ${contained.length - 12} more` : "", "."));
+      el.append(h("p", { class: "blast-more" }, "Changed, and mentioned only in the diff: ", names(contained.slice(0, 12)), contained.length > 12 ? `, and ${contained.length - 12} more` : "", "."));
     const t = br.tests || {};
     if ((t.mentioning || []).length)
       el.append(

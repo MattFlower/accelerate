@@ -351,8 +351,9 @@ file. A row appears only when it says something, and there is no score.
 For JavaScript, TypeScript, Python, Go, and Ruby, `collect` finds the top-level
 and class-level functions and types the change adds, removes, or edits, and
 searches the repo at head for each name (`git grep -w`). The page shows a "Blast
-radius" section after Key changes: for each name, the lines outside the change
-that mention it (with the line text), how many test files mention it, a note
+radius" section after Key changes: for each name, the lines outside the diff
+that mention it (in other files, or in unchanged parts of a changed file, with
+the line text), comment and doc lines that still name it, how many test files mention it, a note
 when the name is defined twice or is too common to mean much, and which changed
 functions no test file mentions. It's a text search, so it says "mentioned", not
 "called". Short and generic names (`get`, `render`, `parse`) are skipped. You
@@ -364,7 +365,13 @@ can't edit it.
 - Before you write a `risk` annotation from it, open the line and confirm it's
   the same symbol and not a same-named one.
 - To show the reviewer a caller, use a `code` block. It can show any file at
-  head, with annotations.
+  head, with annotations. Put it in `keyChanges` right after the changed file,
+  or in a section. A held-back annotation on a file outside the diff opens when
+  the reviewer finishes the pass (or chooses "Show all"), since there's no file
+  for them to mark Viewed.
+- The section is visible from the start, so a removed function that's still
+  named elsewhere is already in front of the reviewer. Don't echo it in visible
+  fields; your analysis of it goes in a `risk` annotation.
 - Don't restate the list in prose. Point a `focus` stop at `#blast-radius` only
   if the outside callers are where the review should go.
 
@@ -426,7 +433,8 @@ Rules for visuals:
 - **`checks.manual`**: two to five concrete things a human should try, written
   as steps that don't give away what you expect them to find. The reviewer can
   tick them off. Name an action, not the unusual input that triggers a suspected
-  bug. Leaky: "Create a link with Never and notice it still expires." Safe:
+  bug, and don't add a step that only makes sense because of a finding ("type-
+  check the project" after you found a compile break gives it away). Leaky: "Create a link with Never and notice it still expires." Safe:
   "Create a link with Never selected and note the expiry it shows."
 
 ### Precision check
