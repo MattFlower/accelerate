@@ -712,7 +712,7 @@ const GENERIC_NAMES = new Set([
   "reset", "clear", "value", "data", "name", "type", "list", "item", "items", "config", "options", "props", "state",
   "result", "error", "callback", "module", "exports", "require", "fetch", "send", "emit", "dispatch", "match", "check",
   "convert", "transform", "serialize", "deserialize", "toJSON", "tojson", "equals", "hash", "copy", "clone", "size", "length",
-  "keys", "values", "entries", "push", "pop", "add", "has", "find", "filter", "map", "reduce", "sort", "merge", "wrap",
+  "keys", "values", "entries", "push", "pop", "add", "has", "find", "filter", "map", "reduce", "sort", "merge", "wrap", "collect", "report", "log",
 ]);
 const DEF_PATTERNS = {
   javascript: [
@@ -720,7 +720,7 @@ const DEF_PATTERNS = {
     [/^(\s*)(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+([A-Za-z_]\w*)/, "type"],
     [/^(\s*)(?:export\s+)?(?:declare\s+)?(?:interface|type|enum)\s+([A-Za-z_]\w*)/, "type"],
     [/^()(?:export\s+)?(?:const|let|var)\s+([A-Za-z_]\w*)\s*(?::[^=]*)?=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*(?::[^=]*)?=>|[A-Za-z_]\w*\s*=>)/, "function"],
-    [/^(\s+)(?:(?:public|private|protected|static|async|readonly|override|abstract)\s+)*([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\([^)]*\)\s*(?::\s*[^={;]+)?\{\s*$/, "function"],
+    [/^(\s+)(?:(?:public|private|protected|static|async|readonly|override|abstract|get|set)\s+)*([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\([^)]*\)\s*(?::\s*[^={;]+)?\{\s*$/, "function"],
   ],
   python: [
     [/^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)/, "function"],
@@ -739,6 +739,41 @@ DEF_PATTERNS.typescript = DEF_PATTERNS.javascript;
 const NOT_A_METHOD = new Set(["if", "for", "while", "switch", "catch", "return", "function", "with", "else", "do", "try"]);
 const CONTAINER = /^\s*(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:class|interface|module|impl)\b/;
 const COMMENT_ONLY = /^\s*(\/\/|#|\*|\/\*|<!--|--\s|""")/;
+// Per language: `#` starts a comment in Python and Ruby but is a private member in JS/TS.
+const LINE_COMMENT = { javascript: /^\s*(\/\/|\/\*|\*)/, typescript: /^\s*(\/\/|\/\*|\*)/, go: /^\s*(\/\/|\/\*|\*)/, python: /^\s*#/, ruby: /^\s*#/ };
+const isCommentLine = (lang, s) => (LINE_COMMENT[lang] || COMMENT_ONLY).test(s);
+const IMPORT_LINE = /^\s*(?:import\b|from\s+\S+\s+import\b|export\s*(?:\{[^}]*\}|\*)\s*from\b|(?:const|let|var)\s*\{[^}]*\}\s*=\s*require\(|require(?:_relative)?\b)/;
+
+// 1-based numbers of lines inside block comments or docstrings (JSDoc without leading
+// asterisks, Python docstrings, Ruby =begin blocks). Rough, but strings rarely fool it.
+function blockCommentLines(lang, lines) {
+  const out = new Set();
+  let open = null;
+  lines.forEach((s, i) => {
+    const t = s.trim();
+    if (open) {
+      out.add(i + 1);
+      if (open.test(t)) open = null;
+      return;
+    }
+    if (lang === "python") {
+      const q = /^[rubfRUBF]*("""|''')/.exec(t);
+      if (q) {
+        out.add(i + 1);
+        if (t.split(q[1]).length - 1 < 2) open = q[1] === '"""' ? /"""/ : /'''/;
+      }
+    } else if (lang === "ruby") {
+      if (/^=begin\b/.test(t)) {
+        out.add(i + 1);
+        open = /^=end\b/;
+      }
+    } else if (t.startsWith("/*")) {
+      out.add(i + 1);
+      if (!t.slice(2).includes("*/")) open = /\*\//;
+    }
+  });
+  return out;
+}
 const NO_SNIPPET = /\.(pem|key|p12|pfx|crt|cer|der|keystore|jks)$/i;
 const DOC_FILE = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(changelog|changes|history|news)(\.|$)/i;
 
@@ -808,34 +843,39 @@ function changedSymbols(files, readOld, readNew) {
         const map = l.t === "+" ? added : removed;
         // Compare signatures, not one-line bodies: stop at the body's opening brace or colon.
         const sig = l.s.trim().replace(/\s*(\{.*|:\s*(#.*)?)$/, "");
-        if (!map.has(d.name)) map.set(d.name, { file: f.path, line: ln, kind: d.kind, text: sig });
+        if (!map.has(d.name)) map.set(d.name, { file: f.path, line: ln, kind: d.kind, text: sig, top: d.indent === 0 });
       }
     }
   }
   for (const [name, r] of removed) {
     const a = added.get(name);
-    if (!a) add(name, { kind: r.kind, change: "removed", file: r.file, line: r.line, side: "old" }, 0);
-    else if (a.text !== r.text) add(name, { kind: a.kind, change: "signature", file: a.file, line: a.line, side: "new" }, 1);
-    else add(name, { kind: a.kind, change: "body", file: a.file, line: a.line, side: "new" }, 2);
+    if (!a) add(name, { kind: r.kind, change: "removed", file: r.file, line: r.line, side: "old", top: r.top }, 0);
+    else if (a.text !== r.text) add(name, { kind: a.kind, change: "signature", file: a.file, line: a.line, side: "new", top: a.top }, 1);
+    else add(name, { kind: a.kind, change: "body", file: a.file, line: a.line, side: "new", top: a.top }, 2);
   }
-  for (const [name, a] of added) if (!removed.has(name)) add(name, { kind: a.kind, change: "added", file: a.file, line: a.line, side: "new" }, 3);
+  for (const [name, a] of added) if (!removed.has(name)) add(name, { kind: a.kind, change: "added", file: a.file, line: a.line, side: "new", top: a.top }, 3);
   // Bodies that changed inside an outer definition.
   for (const f of files) {
     const lang = f.language;
     // An added file's definitions are all new already; a deleted one's are all removed.
     if (!BLAST_LANGS.has(lang) || f.generated || f.mechanical || f.binary || isTestPath(f.path) || f.status === "deleted" || f.status === "added") continue;
     let lines = null;
+    let docNew = null;
+    let docOld = null;
     let budget = 400; // changed lines looked up per file: enough to find the edited definitions
     for (const h of f.hunks) {
       let anchor = null;
       for (const l of h.lines) {
         if (l.n !== undefined) anchor = l.n;
-        if (l.t === " " || l.mv || !l.s.trim() || COMMENT_ONLY.test(l.s) || budget-- <= 0) continue;
+        if (l.t === " " || l.mv || !l.s.trim() || isCommentLine(lang, l.s) || budget-- <= 0) continue;
+        // Edits inside a doc comment don't change behavior.
+        if (l.t === "+" && (docNew ??= blockCommentLines(lang, readNew(f.path)?.split("\n") || [])).has(l.n)) continue;
+        if (l.t === "-" && (docOld ??= blockCommentLines(lang, readOld(f.oldPath || f.path)?.split("\n") || [])).has(l.o)) continue;
         // A removed line sat just after the last new-side line seen.
         const idx = l.t === "+" ? l.n - 1 : anchor ?? h.newStart - 1;
         lines ??= readNew(f.path)?.split("\n") || [];
         const d = enclosingDef(lang, lines, idx, indentOf(l.s));
-        if (d && !added.has(d.name) && !removed.has(d.name)) add(d.name, { kind: d.kind, change: "body", file: f.path, line: d.line, side: "new" }, 2);
+        if (d && !added.has(d.name) && !removed.has(d.name)) add(d.name, { kind: d.kind, change: "body", file: f.path, line: d.line, side: "new", top: d.indent === 0 }, 2);
       }
     }
   }
@@ -859,7 +899,16 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
   // file, or an unchanged stretch of a changed file) is one the reviewer won't see on the page.
   const shown = new Map(files.map((f) => [f.path, new Set(f.hunks.flatMap((h) => h.lines.map((l) => l.n).filter((n) => n !== undefined)))]));
   const prefix = worktree ? "" : `${headSha}:`;
-  const word = new Map(syms.map((s) => [s.name, new RegExp(`(?<![\\w$])${s.name}(?![\\w$])`)]));
+  // `#name` in JS/TS is a private member, never the changed symbol.
+  const word = new Map(syms.map((s) => [s.name, new RegExp(`(?<![\\w$#])${s.name}(?![\\w$])`)]));
+  // In JS/TS a top-level function or type is used by its bare name; `x.name` is some object's property.
+  const bare = new Map(syms.map((s) => [s.name, new RegExp(`(?<![\\w$#.])${s.name}(?![\\w$])`)]));
+  const blockCache = new Map();
+  const inBlock = (p, lang, line) => {
+    if (!LINE_COMMENT[lang] || blockCache.size > 400) return false;
+    if (!blockCache.has(p)) blockCache.set(p, blockCommentLines(lang, (readNew(p) || "").split("\n")));
+    return blockCache.get(p).has(line);
+  };
   const acc = new Map(syms.map((s) => [s.name, { out: [], outLines: 0, outFiles: new Set(), inFiles: new Set(), inLines: 0, tests: new Set(), alsoDefined: [], comments: 0, docs: 0 }]));
   const repoTests = new Set();
   for (const rec of raw.split("\n")) {
@@ -870,13 +919,15 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
     if (!p || p.startsWith(".human-review/") || (outRel && (p === outRel || p.startsWith(outRel + "/")))) continue;
     if (generatedReason(p) || text.length > 400) continue;
     const lang = languageFor(p);
+    const jsLike = lang === "javascript" || lang === "typescript";
     for (const s of syms) {
-      if (!word.get(s.name).test(text)) continue;
+      if (!(jsLike && s.top ? bare : word).get(s.name).test(text)) continue;
       const a = acc.get(s.name);
       if (DOC_FILE.test(p)) { a.docs++; continue; }
-      if (COMMENT_ONLY.test(text)) { a.comments++; continue; }
+      if (isCommentLine(lang, text) || inBlock(p, lang, line)) { a.comments++; continue; }
       const d = BLAST_LANGS.has(lang) ? defAt(lang, text) : null;
       if (d && d.name === s.name) {
+        if (jsLike && s.top && d.indent > 0) continue; // a class member of the same name, not this symbol
         if (!(p === s.file && line === s.line && s.side === "new")) a.alsoDefined.push(`${p}:${line}`);
         continue;
       }
@@ -884,15 +935,18 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
       if (shown.get(p)?.has(line)) { a.inFiles.add(p); a.inLines++; continue; }
       a.outFiles.add(p);
       a.outLines++;
-      if (a.out.length < BLAST_MAX_AT) {
+      if (a.out.length < BLAST_MAX_AT * 4) {
         const hide = isEnvFile(p) || CONFIG_FILE.test(p) || NO_SNIPPET.test(p) || mayHoldKey(text);
-        a.out.push({ path: p, line, text: hide ? null : redact(text.trim(), p).slice(0, 160) });
+        a.out.push({ path: p, line, text: hide ? null : redact(text.trim(), p).slice(0, 160), imp: IMPORT_LINE.test(text) });
       }
     }
   }
   for (const s of syms) {
     const a = acc.get(s.name);
     const common = a.outFiles.size > BLAST_COMMON_FILES;
+    // An import says little when the same file mentions the name again: list the use instead.
+    const used = new Set(a.out.filter((x) => !x.imp).map((x) => x.path));
+    const at = a.out.filter((x) => !(x.imp && used.has(x.path))).slice(0, BLAST_MAX_AT).map(({ imp, ...x }) => x);
     out.symbols.push({
       name: s.name,
       kind: s.kind,
@@ -900,7 +954,7 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
       file: s.file,
       line: s.line,
       side: s.side,
-      outside: { files: a.outFiles.size, lines: a.outLines, at: common ? [] : a.out },
+      outside: { files: a.outFiles.size, lines: a.outLines, at: common ? [] : at },
       inChange: { files: a.inFiles.size, lines: a.inLines },
       tests: [...a.tests].sort().slice(0, 5),
       testFiles: a.tests.size,
@@ -1394,15 +1448,17 @@ function renderReviewText(diff) {
   if (br.symbols.length) {
     out.push("#");
     out.push("# Blast radius: where changed names appear at head, outside the diff's lines (git grep -w;");
-    out.push("# mentions, not proven calls). Read the ones that matter and show them with `code` blocks; don't restate this list:");
+    out.push("# mentions, not proven calls). Open the ones that matter; show a caller with a `code` block only when the");
+    out.push("# reviewer needs to see it. Don't restate this list:");
     const quiet = br.symbols.filter((s) => !blastRow(s));
-    if (quiet.length) out.push(`#   mentioned only in the diff: ${quiet.map((s) => s.name).join(", ")}`);
+    if (quiet.length) out.push(`#   mentioned only in the diff: ${quiet.map((s) => `${s.name} (${BLAST_CHANGE[s.change]})`).join(", ")}`);
+    if ((br.tests?.unmentioned || []).length) out.push(`#   changed functions no test file names: ${br.tests.unmentioned.join(", ")}`);
     for (const s of br.symbols.filter(blastRow)) {
       const where = s.outside.files
         ? `${s.outside.lines} line(s) in ${s.outside.files} file(s) outside the diff${s.common ? " (common name)" : `: ${s.outside.at.map((x) => `${x.path}:${x.line}`).join(", ")}${s.outside.lines > s.outside.at.length ? ", …" : ""}`}`
         : "no code mentions outside the diff";
       const extra = [s.comments ? `${s.comments} comment line(s)` : "", s.docs ? `${s.docs} doc line(s)` : ""].filter(Boolean).join(", ");
-      out.push(`#   ${BLAST_CHANGE[s.change]} ${s.kind} ${s.name} (${s.file}:${s.line}${s.side === "old" ? " old" : ""}): ${where}; ${s.testFiles} test file(s)${extra ? `; also ${extra}` : ""}${s.alsoDefined.length ? `; also defined at ${s.alsoDefined.join(", ")}` : ""}`);
+      out.push(`#   ${BLAST_CHANGE[s.change]} ${s.kind} ${s.name} (${s.file}:${s.line}${s.side === "old" ? " old" : ""}): ${where}; named in ${s.testFiles} test file(s)${extra ? `; also ${extra}` : ""}${s.alsoDefined.length ? `; also defined at ${s.alsoDefined.join(", ")}` : ""}`);
     }
   }
   out.push("");

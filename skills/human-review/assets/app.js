@@ -2291,7 +2291,7 @@ ul, ol { margin: 0; padding-left: 18px; }
             const facts = [];
             facts.push(s.outside.files ? `Mentioned on ${plural(s.outside.lines, "line")} in ${plural(s.outside.files, "file")} outside the diff` : "No code mentions outside the diff");
             if (s.inChange.lines) facts.push(`${plural(s.inChange.lines, "line")} in the diff`);
-            facts.push(s.testFiles ? `${plural(s.testFiles, "test file")}` : "no test file");
+            facts.push(s.testFiles ? `named in ${plural(s.testFiles, "test file")}` : "no test file names it");
             if (s.comments) facts.push(plural(s.comments, "comment line"));
             if (s.docs) facts.push(`${plural(s.docs, "line")} in docs`);
             const caveats = [];
@@ -2332,13 +2332,13 @@ ul, ol { margin: 0; padding-left: 18px; }
         h(
           "p",
           { class: "blast-more" },
-          "Test files that mention changed code: ",
+          "Test files that name changed code: ",
           t.mentioning.map((p, i) => [i ? ", " : "", byPath.has(p) ? h("a", { href: "#", class: "hr-ref", dataset: { ref: p } }, h("code", null, p)) : h("code", null, p)]),
           t.total > t.mentioning.length ? `, and ${t.total - t.mentioning.length} more` : "",
           ".",
         ),
       );
-    if ((t.unmentioned || []).length) el.append(h("p", { class: "blast-more" }, "Changed functions no test file mentions: ", t.unmentioned.map((n, i) => [i ? ", " : "", h("code", null, n)]), "."));
+    if ((t.unmentioned || []).length) el.append(h("p", { class: "blast-more" }, "Changed functions no test file names: ", t.unmentioned.map((n, i) => [i ? ", " : "", h("code", null, n)]), "."));
     for (const n of notes) el.append(h("p", { class: "signals-note" }, n));
     sec.append(el);
     return sec;

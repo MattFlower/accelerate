@@ -349,13 +349,15 @@ file. A row appears only when it says something, and there is no score.
 ### Blast radius
 
 For JavaScript, TypeScript, Python, Go, and Ruby, `collect` finds the top-level
-and class-level functions and types the change adds, removes, or edits, and
+functions and types, and the public methods of classes, that the change adds
+(`new`), removes, changes the declaration line of (`signature-changed`), or
+edits inside (`body-changed`; edits to comments alone don't count), and
 searches the repo at head for each name (`git grep -w`). The page shows a "Blast
 radius" section after Key changes: for each name, the lines outside the diff
 that mention it (in other files, or in unchanged parts of a changed file, with
 the line text), comment and doc lines that still name it, how many test files mention it, a note
 when the name is defined twice or is too common to mean much, and which changed
-functions no test file mentions. It's a text search, so it says "mentioned", not
+functions no test file names. It's a text search, so it says "mentioned", not
 "called". Short and generic names (`get`, `render`, `parse`) are skipped. You
 can't edit it.
 
