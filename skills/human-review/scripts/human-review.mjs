@@ -526,9 +526,9 @@ const SENSITIVE_WORDS = {
 };
 
 // Like git(), but bounded in time and quiet on failure: a signal we can't compute is left out.
-function gitQuiet(args, { cwd, timeout = HISTORY_TIMEOUT_MS } = {}) {
+function gitQuiet(args, { cwd, timeout = HISTORY_TIMEOUT_MS, okCodes = [0] } = {}) {
   const r = spawnSync("git", ["-c", "core.quotePath=false", ...args], { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024, timeout });
-  return r.error || r.status !== 0 ? null : r.stdout;
+  return r.error || !okCodes.includes(r.status) ? null : r.stdout;
 }
 
 // Names come from git and end up in rendered Markdown: drop anything that could format or link.
@@ -818,13 +818,15 @@ function changedSymbols(files, readOld, readNew) {
   // Bodies that changed inside an outer definition.
   for (const f of files) {
     const lang = f.language;
-    if (!BLAST_LANGS.has(lang) || f.generated || f.mechanical || f.binary || isTestPath(f.path) || f.status === "deleted") continue;
+    // An added file's definitions are all new already; a deleted one's are all removed.
+    if (!BLAST_LANGS.has(lang) || f.generated || f.mechanical || f.binary || isTestPath(f.path) || f.status === "deleted" || f.status === "added") continue;
     let lines = null;
+    let budget = 400; // changed lines looked up per file: enough to find the edited definitions
     for (const h of f.hunks) {
       let anchor = null;
       for (const l of h.lines) {
         if (l.n !== undefined) anchor = l.n;
-        if (l.t === " " || l.mv || !l.s.trim() || COMMENT_ONLY.test(l.s)) continue;
+        if (l.t === " " || l.mv || !l.s.trim() || COMMENT_ONLY.test(l.s) || budget-- <= 0) continue;
         // A removed line sat just after the last new-side line seen.
         const idx = l.t === "+" ? l.n - 1 : anchor ?? h.newStart - 1;
         lines ??= readNew(f.path)?.split("\n") || [];
@@ -844,7 +846,7 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
   if (worktree) {
     if (untracked.length) args.push("--untracked");
   } else args.push(headSha);
-  const raw = gitQuiet([...args, "--"], { cwd: root });
+  const raw = gitQuiet([...args, "--"], { cwd: root, okCodes: [0, 1] }); // 1: no matches
   if (raw === null) {
     out.notes.push("Blast radius left out: searching the repository failed or timed out.");
     return out;
