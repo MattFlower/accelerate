@@ -119,10 +119,10 @@ When the draft is done, do the **precision check** (below) before you build.
 ### 5. Build
 
 ```bash
-node "${CLAUDE_SKILL_DIR}/scripts/human-review.mjs" build <dir> --open
+node "${CLAUDE_SKILL_DIR}/scripts/human-review.mjs" build <dir>
 ```
 
-`--open` opens the page in the user's default browser, so pass it only when the
+Add `--open` to open the page in the user's default browser, but only when the
 user is at this machine. Leave it off in a CI, SSH, or other remote session. The
 CLI also skips opening when it detects one of those, and prints the path instead.
 
@@ -587,8 +587,9 @@ line quoted) or to a named block. When the user pastes it:
   keys, `.env` values, passwords in config files) and report how many and where
   (`path:line`). `collect` covers the diff. `build` covers the full file
   contents it embeds, including lines outside the diff, so it can report values
-  `collect` didn't. Look at each spot: if a real code line was blanked, say so in
-  the handoff. It's a heuristic, so never copy a secret into `recap.json`, a
+  `collect` didn't. Look at each spot. A blanked placeholder or doc example
+  (`token: 'secret123'`) is harmless. If a line the reviewer needs to read was
+  blanked, say so in the handoff. It's a heuristic, so never copy a secret into `recap.json`, a
   wireframe, or an API example; use obvious placeholders.
 - The page's Content-Security-Policy blocks all network requests, so remote
   images or stylesheets in your HTML or Markdown won't load.

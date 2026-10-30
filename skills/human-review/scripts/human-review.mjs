@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.6.0";
+const VERSION = "0.6.1";
 const RUNTIME = process.versions.bun ? "bun" : "node";
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ASSETS = path.join(SKILL_DIR, "assets");
@@ -719,8 +719,8 @@ const DEF_PATTERNS = {
     [/^(\s*)(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_]\w*)/, "function"],
     [/^(\s*)(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?class\s+([A-Za-z_]\w*)/, "type"],
     [/^(\s*)(?:export\s+)?(?:declare\s+)?(?:interface|type|enum)\s+([A-Za-z_]\w*)/, "type"],
-    [/^()(?:export\s+)?(?:const|let|var)\s+([A-Za-z_]\w*)\s*(?::[^=]*)?=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*(?::[^=]*)?=>|[A-Za-z_]\w*\s*=>)/, "function"],
-    [/^(\s+)(?:(?:public|private|protected|static|async|readonly|override|abstract|get|set)\s+)*([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\([^)]*\)\s*(?::\s*[^={;]+)?\{\s*$/, "function"],
+    [/^()(?:export\s+)?(?:const|let|var)\s+([A-Za-z_]\w*)\s*(?::[^=]*)?=\s*(?:async\s+)?(?:function\b|\((?:[^()]|\([^()]*\))*\)\s*(?::[^=]*)?=>|[A-Za-z_]\w*\s*=>)/, "function"],
+    [/^(\s+)(?:(?:public|private|protected|static|async|readonly|override|abstract|get|set)\s+)*([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\((?:[^()]|\([^()]*\))*\)\s*(?::\s*[^={;]+)?\{\s*$/, "function"],
   ],
   python: [
     [/^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)/, "function"],
@@ -1273,6 +1273,18 @@ function hostedRepoName(remote) {
   return m && !/^file:/i.test(remote) ? m[1] : null;
 }
 
+// What to call the repo: "owner/repo" from a hosted origin; for a clone of a local repo, that
+// repo's folder ("ky", not the "ky-after" checkout); else the main checkout's folder, so a linked
+// worktree's folder name doesn't stand in for the project.
+function repoLabel(root, remote) {
+  const hosted = hostedRepoName(remote);
+  if (hosted) return hosted;
+  const local = path.basename(remote.replace(/^file:\/\//i, "").replace(/[\\/]+$/, "")).replace(/\.git$/, "");
+  if (local) return local;
+  const common = (git(["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: root, allowFail: true }) || "").trim();
+  return common && path.basename(common) === ".git" ? path.basename(path.dirname(common)) : path.basename(root);
+}
+
 // "3 secret-looking value(s) redacted at a.ts:4, b.yml:9" — with the spots, so the agent can
 // check that no real code line was blanked.
 function redactionReport(n, places = [], totalPlaces = places.length, from = "") {
@@ -1394,7 +1406,7 @@ function collect(opts) {
   const signals = historySignals(root, files, { baseSha: baseIsTree ? null : baseSha, logRange, worktree, redact });
 
   const remote = (git(["remote", "get-url", "origin"], { cwd: root, allowFail: true }) || "").trim();
-  const repoName = hostedRepoName(remote) || path.basename(root);
+  const repoName = repoLabel(root, remote);
 
   const outDir = path.resolve(opts.out || path.join(root, ".human-review", slug));
   // Never overwrite another change's review (and silently inherit its recap.json).
@@ -1463,7 +1475,7 @@ function collect(opts) {
   out.push(`  dir       ${outDir}`);
   out.push(`  read      ${path.join(outDir, "review.txt")}   (line-numbered diff — annotate with these numbers)`);
   out.push(`  write     ${recapPath}${wroteSkeleton ? "   (skeleton created)" : "   (exists — left untouched)"}`);
-  out.push(`  then run  ${RUNTIME} ${path.join(SKILL_DIR, "scripts", "human-review.mjs")} build "${outDir}" --open`);
+  out.push(`  then run  ${RUNTIME} ${path.join(SKILL_DIR, "scripts", "human-review.mjs")} build "${outDir}"   (add --open if the user is at this machine)`);
   if (files.length === 0) out.push("\n  No changes found. Pass --base <ref>, --head <ref>, or --pr <number>.");
   process.stdout.write(out.join("\n") + "\n");
 }
