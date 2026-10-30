@@ -1,3 +1,4 @@
 .human-review/
 .DS_Store
 node_modules/
+.claude/launch.json
