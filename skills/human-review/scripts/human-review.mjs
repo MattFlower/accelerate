@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.6.1";
+const VERSION = "0.6.2";
 const RUNTIME = process.versions.bun ? "bun" : "node";
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ASSETS = path.join(SKILL_DIR, "assets");
@@ -683,12 +683,16 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
     out.items.push({
       id: "fixes",
       tag: "author text",
-      via: "earlier commit messages",
-      text: `${fixed.length === 1 ? "One file has" : `${fixed.length} files have`} had repeated fix-style commits since ${fixSince}: \`${path.basename(top.f.path)}\` has ${top.fixes.length}, the latest on ${latest.day}.`,
+      via: "earlier commit messages (a subject that says fix, hotfix, revert, regression, or crash, and isn't about typos, lint, formatting, comments, docs, CI, or tests)",
+      // Every file with its count, so the claim can be checked file by file.
+      text: `${fixed.length === 1 ? "One file has" : `${fixed.length} files have`} had repeated fix-style commits since ${fixSince}: ${fixed
+        .slice(0, 8)
+        .map((x) => `\`${path.basename(x.f.path)}\` ${x.fixes.length}`)
+        .join(", ")}${fixed.length > 8 ? `, and ${fixed.length - 8} more` : ""}. The latest, in \`${path.basename(top.f.path)}\`, was on ${latest.day}.`,
       // Shown on the page only: review.txt is read by the agent, and old commit wording isn't something to feed it.
       quote: redact(latest.subject, null, "a commit message in the history").slice(0, 80),
-      files: shortList(fixed.map((x) => x.f.path)),
-      cmd: `git log --no-merges --since=${fixSince} --oneline ${baseSha.slice(0, 10)} -- <file>`,
+      files: shortList(fixed.map((x) => x.f.path), 8),
+      cmd: `git log --no-merges --since=${fixSince} --format=%s ${baseSha.slice(0, 10)} -- <file>, counting the fix-style subjects`,
     });
   }
   return out;
@@ -927,7 +931,7 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
     if (!blockCache.has(p)) blockCache.set(p, blockCommentLines(lang, (readNew(p) || "").split("\n")));
     return blockCache.get(p).has(line);
   };
-  const acc = new Map(syms.map((s) => [s.name, { out: [], outLines: 0, outFiles: new Set(), inFiles: new Set(), inLines: 0, tests: new Set(), alsoDefined: [], comments: 0, docs: 0 }]));
+  const acc = new Map(syms.map((s) => [s.name, { out: [], outLines: 0, outFiles: new Set(), inFiles: new Set(), inLines: 0, inAt: [], tests: new Set(), alsoDefined: [], comments: 0, docs: 0 }]));
   const repoTests = new Set();
   for (const rec of raw.split("\n")) {
     if (!rec) continue;
@@ -950,7 +954,11 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
         continue;
       }
       if (isTestPath(p)) { a.tests.add(p); repoTests.add(p); continue; }
-      if (shown.get(p)?.has(line)) { a.inFiles.add(p); a.inLines++; continue; }
+      if (shown.get(p)?.has(line)) {
+        a.inFiles.add(p);
+        if (++a.inLines <= 4) a.inAt.push({ path: p, line });
+        continue;
+      }
       a.outFiles.add(p);
       a.outLines++;
       if (a.out.length < BLAST_MAX_AT * 4) {
@@ -973,7 +981,7 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
       line: s.line,
       side: s.side,
       outside: { files: a.outFiles.size, lines: a.outLines, at: common ? [] : at },
-      inChange: { files: a.inFiles.size, lines: a.inLines },
+      inChange: { files: a.inFiles.size, lines: a.inLines, at: a.inAt },
       tests: [...a.tests].sort().slice(0, 5),
       testFiles: a.tests.size,
       alsoDefined: a.alsoDefined.slice(0, 3),
@@ -1041,20 +1049,21 @@ function languageFor(p) {
 
 // ───────────────────────────────────────────────────────────── secret redaction
 
+// Each with the name the redaction report gives it.
 const SECRET_PATTERNS = [
-  /AKIA[0-9A-Z]{16}/g,
-  /\bnpm_[A-Za-z0-9]{30,}/g,
-  /\bglpat-[A-Za-z0-9_-]{20,}/g,
+  [/AKIA[0-9A-Z]{16}/g, "AWS key"],
+  [/\bnpm_[A-Za-z0-9]{30,}/g, "npm token"],
+  [/\bglpat-[A-Za-z0-9_-]{20,}/g, "GitLab token"],
   // A whole key written on one line (JSON/env strings with escaped newlines).
-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\[rn]|[A-Za-z0-9+/=:\s-])+?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g,
-  /\b(?:sk|pk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g,
-  /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/g,
-  /\bgh[pousr]_[A-Za-z0-9]{30,}/g,
-  /\bgithub_pat_[A-Za-z0-9_]{30,}/g,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
-  /\bAIza[0-9A-Za-z_-]{35}/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]+/g,
+  [/-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----(?:\\[rn]|[A-Za-z0-9+/=:\s-])+?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/g, "private key"],
+  [/\b(?:sk|pk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g, "Stripe key"],
+  [/\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/g, "API key"],
+  [/\bgh[pousr]_[A-Za-z0-9]{30,}/g, "GitHub token"],
+  [/\bgithub_pat_[A-Za-z0-9_]{30,}/g, "GitHub token"],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, "Slack token"],
+  [/\bAIza[0-9A-Za-z_-]{35}/g, "Google API key"],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, "JWT"],
+  [/https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]+/g, "Slack webhook"],
 ];
 // A key name that ends in a secret-ish word: password, DB_PASSWORD, apiKey, aws_secret_access_key,
 // _authToken… but not tokenizer, authorField, or passwordPolicy.
@@ -1094,40 +1103,45 @@ function isEnvFile(p) {
   return b.startsWith(".env") && !/(example|sample|template|dist|defaults)/.test(b);
 }
 
+// The secret-ish key name in `password: "`, `DB_PASSWORD=`, `"apiKey": "` (the last word-ish run before the separator).
+const keyName = (s) => (/([\w.-]+)["']?\s*[:=]\s*["']?$/.exec(s.trimEnd()) || [, "secret"])[1];
+
 // Line redactor. Stateless: the same line always redacts the same way, wherever it appears.
-// `where` names the spot (a `path:line`, "PR description") so the report can say where to look.
+// `where` names the spot (a `path:line`, "PR description") and each match adds what it looked like
+// ("token value", "private key"), so the report says where to look and what was blanked.
 const REDACT_MAX_PLACES = 50;
 function makeRedactor() {
   let count = 0;
   const places = new Set();
-  const note = (where) => {
+  const note = (where, kind) => {
     count++;
-    if (where) places.add(where);
+    // "a.yml:2 (old)" + "password value" → "a.yml:2 (old, password value)"
+    if (where) places.add(!kind ? where : where.endsWith(")") ? `${where.slice(0, -1)}, ${kind})` : `${where} (${kind})`);
   };
   const fn = (s, file, where = file) => {
     if (typeof s !== "string" || !s) return s;
     let out = s;
     if (file && isEnvFile(file)) {
       out = out.replace(/^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^\r\n]+?)(\r?)$/, (m, k, v, cr) => {
-        note(where);
+        note(where, ".env value");
         return k + REDACTED + cr;
       });
     } else if (file && CONFIG_FILE.test(file)) {
       out = out.replace(CONFIG_SECRET, (m, k, v, comment = "", cr) => {
         if (v.length < 6 || NOT_A_SECRET.test(v) || v === REDACTED) return m;
-        note(where);
+        note(where, `${keyName(k)} value`);
         return k + REDACTED + comment + cr;
       });
     }
-    for (const re of SECRET_PATTERNS) {
+    for (const [re, kind] of SECRET_PATTERNS) {
       out = out.replace(re, () => {
-        note(where);
+        note(where, kind);
         return REDACTED;
       });
     }
     out = out.replace(ASSIGNED_SECRET, (m, pre, val, post) => {
       if (val === REDACTED || /^(\$\{|process\.env|os\.environ|env\(|<|\{\{)/.test(val)) return m;
-      note(where);
+      note(where, `${keyName(pre)} value`);
       return pre + REDACTED + post;
     });
     return out;
@@ -1143,7 +1157,7 @@ function makeRedactor() {
 function redactText(text, file, redact) {
   const lines = text.split("\n");
   const keys = keyLines(lines);
-  return lines.map((l, i) => (keys.has(i + 1) ? (redact.bump(`${file}:${i + 1}`), REDACTED) : redact(l, file, `${file}:${i + 1}`))).join("\n");
+  return lines.map((l, i) => (keys.has(i + 1) ? (redact.bump(`${file}:${i + 1}`, "private key"), REDACTED) : redact(l, file, `${file}:${i + 1}`))).join("\n");
 }
 
 // Read a file as of a commit, or from the working tree. Symlinks yield their target path
@@ -1186,11 +1200,11 @@ function redactHunks(f, redact, readOld, readNew) {
   const looksLikeKey = (s) => s.length >= 40 && BASE64_LINE.test(s);
   for (const h of f.hunks) {
     const at = `${f.path}:${h.newStart} (hunk header)`;
-    h.header = anyKeys && looksLikeKey(h.header) ? (redact.bump(at), REDACTED) : redact(h.header, f.path, at);
+    h.header = anyKeys && looksLikeKey(h.header) ? (redact.bump(at, "private key"), REDACTED) : redact(h.header, f.path, at);
     for (const l of h.lines) {
       const where = l.t === "-" ? `${f.oldPath || f.path}:${l.o} (old)` : `${f.path}:${l.n}`;
       const isKey = (l.t !== "+" && oldKeys.has(l.o)) || (l.t !== "-" && newKeys.has(l.n)) || (blind && looksLikeKey(l.s));
-      l.s = isKey ? (redact.bump(where), REDACTED) : redact(l.s, f.path, where);
+      l.s = isKey ? (redact.bump(where, "private key"), REDACTED) : redact(l.s, f.path, where);
     }
   }
 }

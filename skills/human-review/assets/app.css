@@ -213,6 +213,8 @@ main.hr-main { padding: 44px clamp(20px, 4vw, 56px) 140px; }
 .prose h3 { font-size: 16px; margin: 1.4em 0 0.4em; }
 .prose h4 { font-size: 15px; margin: 1.2em 0 0.3em; }
 .prose table { border-collapse: collapse; margin: 0.6em 0 1em; font-size: 14px; display: block; overflow-x: auto; }
+/* The table scrolls sideways instead, so a code name in a narrow column keeps its column wide enough. */
+.prose :is(td, th) code { overflow-wrap: normal; }
 .prose th, .prose td { border: 1px solid var(--rule); padding: 6px 10px; text-align: left; vertical-align: top; }
 .prose th { background: var(--sunken); font-weight: 600; }
 .prose pre { background: var(--sunken); border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }

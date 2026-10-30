@@ -796,9 +796,14 @@
       "div",
       { class: "held" },
       icon("eye"),
-      h("span", null, `${plural(n, "agent finding")} for this file ${n === 1 ? "is" : "are"} held back until you've reviewed it. Mark the file Viewed to compare notes, or `),
-      h("button", { type: "button", class: "linklike", onclick: onShow }, "show now"),
-      ".",
+      // One span, so the flex gap doesn't separate the link and the period from the sentence.
+      h(
+        "span",
+        null,
+        `${plural(n, "agent finding")} for this file ${n === 1 ? "is" : "are"} held back until you've reviewed it. Mark the file Viewed to compare notes, or `,
+        h("button", { type: "button", class: "linklike", onclick: onShow }, "show now"),
+        ".",
+      ),
     );
   }
 
@@ -2455,7 +2460,11 @@ ul, ol { margin: 0; padding-left: 18px; }
           rows.map((s) => {
             const facts = [];
             facts.push(s.outside.files ? `Mentioned on ${plural(s.outside.lines, "line")} in ${plural(s.outside.files, "file")} outside the diff` : "No code mentions outside the diff");
-            if (s.inChange.lines) facts.push(`${plural(s.inChange.lines, "line")} in the diff`);
+            if (s.inChange.lines) {
+              const seen = (s.inChange.at || []).map((x) => `${splitPath(x.path)[1]}:${x.line}`);
+              const more = s.inChange.lines > seen.length ? ", …" : "";
+              facts.push(`also on ${plural(s.inChange.lines, "other line")} this page shows${seen.length ? ` (${seen.join(", ")}${more})` : ""}`);
+            }
             facts.push(s.testFiles ? `named in ${plural(s.testFiles, "test file")}` : "no test file names it");
             if (s.comments) facts.push(plural(s.comments, "comment line"));
             if (s.docs) facts.push(`${plural(s.docs, "line")} in docs`);
@@ -3284,25 +3293,21 @@ ul, ol { margin: 0; padding-left: 18px; }
 
     // Section highlighting in the TOC
     const links = new Map([...side.querySelectorAll("[data-toc]")].map((a) => [a.dataset.toc, a]));
-    const visible = new Map();
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) visible.set(e.target.id, e.isIntersecting ? e.boundingClientRect.top : null);
-        let best = null;
-        for (const s of sectionsForToc) {
-          const el = document.getElementById(s.id);
-          if (!el) continue;
-          const r = el.getBoundingClientRect();
-          if (r.top < window.innerHeight * 0.35) best = s.id;
-        }
-        for (const [id, a] of links) a.classList.toggle("active", id === best);
-      },
-      { rootMargin: "0px 0px -60% 0px", threshold: [0, 1] },
-    );
-    for (const s of sectionsForToc) {
-      const el = document.getElementById(s.id);
-      if (el) io.observe(el);
-    }
+    // Measured on every scroll, so it reflects where scrolling stopped (an observer's last callback
+    // can fire mid-scroll and leave the previous section lit). At the bottom, the last section in view wins.
+    const spy = () => {
+      const atEnd = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
+      const line = atEnd ? window.innerHeight : window.innerHeight * 0.35;
+      let best = null;
+      for (const s of sectionsForToc) {
+        const el = document.getElementById(s.id);
+        if (el && el.getBoundingClientRect().top < line) best = s.id;
+      }
+      for (const [id, a] of links) a.classList.toggle("active", id === best);
+    };
+    window.addEventListener("scroll", spy, { passive: true });
+    window.addEventListener("resize", spy);
+    spy();
     const titleEl = document.getElementById("hr-title");
     const topTitle = document.getElementById("hr-top-title");
     new IntersectionObserver(([e]) => topTitle.classList.toggle("show", !e.isIntersecting), { rootMargin: `-${52}px 0px 0px 0px` }).observe(titleEl);
