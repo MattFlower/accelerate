@@ -224,6 +224,11 @@ main reason a page like this is hard to read. For every field:
   into a puzzle, and the build warns at four.
 - **Effect before mechanism.** Say what changes for a user or a caller, then
   how.
+- **Make the top of the page stand alone.** `brief`, `background`, `ask`,
+  `summary`, and `risk.why` are read before any code. Don't lean on a name the
+  page only explains further down; say it in words there, or define it in
+  `terms`. If the change exists to work around something (a browser limit, a
+  vendor bug), say what that something is in one clause.
 - **Full sentences, not telegraph.** "Owners only." is fine as a file note.
   "Gate `canShare` not `canEdit`; editors 403" is not.
 
