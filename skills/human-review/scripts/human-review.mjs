@@ -686,7 +686,7 @@ function historySignals(root, files, { baseSha, logRange, worktree, redact }) {
       via: "earlier commit messages",
       text: `${fixed.length === 1 ? "One file has" : `${fixed.length} files have`} had repeated fix-style commits since ${fixSince}: \`${path.basename(top.f.path)}\` has ${top.fixes.length}, the latest on ${latest.day}.`,
       // Shown on the page only: review.txt is read by the agent, and old commit wording isn't something to feed it.
-      quote: redact(latest.subject, null).slice(0, 80),
+      quote: redact(latest.subject, null, "a commit message in the history").slice(0, 80),
       files: shortList(fixed.map((x) => x.f.path)),
       cmd: `git log --no-merges --since=${fixSince} --oneline ${baseSha.slice(0, 10)} -- <file>`,
     });
@@ -843,7 +843,7 @@ function changedSymbols(files, readOld, readNew) {
   for (const f of files) {
     const lang = f.language;
     if (!BLAST_LANGS.has(lang) || f.generated || f.mechanical || f.binary || isTestPath(f.path)) continue;
-    let newLines, oldLines;
+    let newLines, oldLines, docNew, docOld;
     const nl = () => (newLines ??= (f.status === "deleted" ? null : readNew(f.path))?.split("\n") || null);
     const ol = () => (oldLines ??= (f.status === "added" ? null : readOld(f.oldPath || f.path))?.split("\n") || null);
     for (const h of f.hunks) {
@@ -853,6 +853,9 @@ function changedSymbols(files, readOld, readNew) {
         if (!d) continue;
         const lines = l.t === "+" ? nl() : ol();
         const ln = l.t === "+" ? l.n : l.o;
+        // A definition inside a doc comment (an @example, a docstring) is sample code, not this file's.
+        const doc = l.t === "+" ? (docNew ??= blockCommentLines(lang, lines || [])) : (docOld ??= blockCommentLines(lang, lines || []));
+        if (doc.has(ln)) continue;
         if (d.indent > 0 && !(lines && isOuterDef(lines, ln - 1, d))) continue;
         const map = l.t === "+" ? added : removed;
         // Compare signatures, not one-line bodies: stop at the body's opening brace (the first one
@@ -952,7 +955,7 @@ function blastRadius(root, files, { headSha, worktree, untracked, outRel, readOl
       a.outLines++;
       if (a.out.length < BLAST_MAX_AT * 4) {
         const hide = isEnvFile(p) || CONFIG_FILE.test(p) || NO_SNIPPET.test(p) || mayHoldKey(text);
-        a.out.push({ path: p, line, text: hide ? null : redact(text.trim(), p).slice(0, 160), imp: IMPORT_LINE.test(text) });
+        a.out.push({ path: p, line, text: hide ? null : redact(text.trim(), p, `${p}:${line} (blast radius)`).slice(0, 160), imp: IMPORT_LINE.test(text) });
       }
     }
   }
@@ -1092,38 +1095,46 @@ function isEnvFile(p) {
 }
 
 // Line redactor. Stateless: the same line always redacts the same way, wherever it appears.
+// `where` names the spot (a `path:line`, "PR description") so the report can say where to look.
+const REDACT_MAX_PLACES = 50;
 function makeRedactor() {
   let count = 0;
-  const fn = (s, file) => {
+  const places = new Set();
+  const note = (where) => {
+    count++;
+    if (where && places.size < REDACT_MAX_PLACES) places.add(where);
+  };
+  const fn = (s, file, where = file) => {
     if (typeof s !== "string" || !s) return s;
     let out = s;
     if (file && isEnvFile(file)) {
       out = out.replace(/^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^\r\n]+?)(\r?)$/, (m, k, v, cr) => {
-        count++;
+        note(where);
         return k + REDACTED + cr;
       });
     } else if (file && CONFIG_FILE.test(file)) {
       out = out.replace(CONFIG_SECRET, (m, k, v, comment = "", cr) => {
         if (v.length < 6 || NOT_A_SECRET.test(v) || v === REDACTED) return m;
-        count++;
+        note(where);
         return k + REDACTED + comment + cr;
       });
     }
     for (const re of SECRET_PATTERNS) {
       out = out.replace(re, () => {
-        count++;
+        note(where);
         return REDACTED;
       });
     }
     out = out.replace(ASSIGNED_SECRET, (m, pre, val, post) => {
       if (val === REDACTED || /^(\$\{|process\.env|os\.environ|env\(|<|\{\{)/.test(val)) return m;
-      count++;
+      note(where);
       return pre + REDACTED + post;
     });
     return out;
   };
   fn.count = () => count;
-  fn.bump = () => count++;
+  fn.places = () => [...places];
+  fn.bump = note;
   return fn;
 }
 
@@ -1131,7 +1142,7 @@ function makeRedactor() {
 function redactText(text, file, redact) {
   const lines = text.split("\n");
   const keys = keyLines(lines);
-  return lines.map((l, i) => (keys.has(i + 1) ? (redact.bump(), REDACTED) : redact(l, file))).join("\n");
+  return lines.map((l, i) => (keys.has(i + 1) ? (redact.bump(`${file}:${i + 1}`), REDACTED) : redact(l, file, `${file}:${i + 1}`))).join("\n");
 }
 
 // Read a file as of a commit, or from the working tree. Symlinks yield their target path
@@ -1173,10 +1184,12 @@ function redactHunks(f, redact, readOld, readNew) {
   const anyKeys = blind || oldKeys.size + newKeys.size > 0;
   const looksLikeKey = (s) => s.length >= 40 && BASE64_LINE.test(s);
   for (const h of f.hunks) {
-    h.header = anyKeys && looksLikeKey(h.header) ? (redact.bump(), REDACTED) : redact(h.header, f.path);
+    const at = `${f.path}:${h.newStart} (hunk header)`;
+    h.header = anyKeys && looksLikeKey(h.header) ? (redact.bump(at), REDACTED) : redact(h.header, f.path, at);
     for (const l of h.lines) {
+      const where = l.t === "-" ? `${f.oldPath || f.path}:${l.o} (old)` : `${f.path}:${l.n}`;
       const isKey = (l.t !== "+" && oldKeys.has(l.o)) || (l.t !== "-" && newKeys.has(l.n)) || (blind && looksLikeKey(l.s));
-      l.s = isKey ? (redact.bump(), REDACTED) : redact(l.s, f.path);
+      l.s = isKey ? (redact.bump(where), REDACTED) : redact(l.s, f.path, where);
     }
   }
 }
@@ -1250,6 +1263,21 @@ function computePatch(root, { baseSha, headSha, worktree, context, outRel }) {
     }
   }
   return { patch, untracked };
+}
+
+// "owner/repo" from a hosted remote (https://host/owner/repo.git, git@host:owner/repo). A local
+// path or file:// remote (a clone of a clone) names some other folder, so it yields nothing.
+function hostedRepoName(remote) {
+  const m = /^(?:[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?[^/]+\/|(?:[^@/:\s]+@)?[^@:/\\\s]{2,}:(?![/\\]))(?:.*\/)?([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(remote);
+  return m && !/^file:/i.test(remote) ? m[1] : null;
+}
+
+// "3 secret-looking value(s) redacted from the diff: a.ts:4, b.yml:9" — with the spots, so the
+// agent can check that no real code line was blanked.
+function redactionReport(n, places = [], from) {
+  const shown = places.slice(0, 8);
+  const more = n > shown.length ? `, +${n - shown.length} more` : "";
+  return `  ${n} secret-looking value(s) redacted ${from}${shown.length ? `: ${shown.join(", ")}${more}` : ""}`;
 }
 
 function collect(opts) {
@@ -1338,8 +1366,8 @@ function collect(opts) {
     );
   }
   if (pr) {
-    pr.title = redact(pr.title, null);
-    pr.body = redact(pr.body, null);
+    pr.title = redact(pr.title, null, "PR title");
+    pr.body = redact(pr.body, null, "PR description");
   }
 
   const range = worktree ? `${baseSha}..(working tree)` : `${baseSha}..${headSha}`;
@@ -1350,7 +1378,7 @@ function collect(opts) {
         .split("\n")
         .map((l) => l.split("\x1f"))
         .filter((parts) => parts.length === 4)
-        .map(([sha, author, date, subject]) => ({ sha, author, date, subject: redact(subject, null) }))
+        .map(([sha, author, date, subject]) => ({ sha, author, date, subject: redact(subject, null, `commit ${sha}`) }))
     : [];
 
   const blast = blastRadius(root, files, {
@@ -1365,7 +1393,7 @@ function collect(opts) {
   const signals = historySignals(root, files, { baseSha: baseIsTree ? null : baseSha, logRange, worktree, redact });
 
   const remote = (git(["remote", "get-url", "origin"], { cwd: root, allowFail: true }) || "").trim();
-  const repoName = (remote.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/) || [])[1] || path.basename(root);
+  const repoName = hostedRepoName(remote) || path.basename(root);
 
   const outDir = path.resolve(opts.out || path.join(root, ".human-review", slug));
   // Never overwrite another change's review (and silently inherit its recap.json).
@@ -1398,6 +1426,7 @@ function collect(opts) {
     untracked,
     fingerprint,
     redactions: redact.count(),
+    redactedAt: redact.places(),
     signals,
     blast,
     commits,
@@ -1421,7 +1450,7 @@ function collect(opts) {
   out.push(`  base  ${baseRef} @ ${baseSha.slice(0, 10)}`);
   out.push(`  head  ${headRef} @ ${headSha.slice(0, 10)}${worktree ? " + uncommitted changes" : ""}${pr ? `  (PR #${pr.number})` : ""}`);
   out.push(`  ${commits.length} commit${commits.length === 1 ? "" : "s"}${untracked.length ? `, ${untracked.length} untracked file(s) included` : ""}`);
-  if (diff.redactions) out.push(`  ${diff.redactions} secret-looking value(s) redacted from the diff`);
+  if (diff.redactions) out.push(redactionReport(diff.redactions, diff.redactedAt, "from the diff"));
   out.push("");
   const w = Math.min(70, Math.max(...files.map((f) => f.path.length), 10));
   for (const f of files) {
@@ -2204,7 +2233,7 @@ function build(opts) {
     diff: { ...diff, root: undefined, patchSpec: undefined },
     contents,
     assets,
-    meta: { builtAt: new Date().toISOString(), version: VERSION, stale, types: [...typesUsed], contentRedactions: redact.count() },
+    meta: { builtAt: new Date().toISOString(), version: VERSION, stale, types: [...typesUsed], contentRedactions: redact.count(), contentRedactedAt: redact.places() },
   };
 
   const read = (p) => fs.readFileSync(path.join(ASSETS, p), "utf8");
@@ -2235,11 +2264,24 @@ function build(opts) {
   fs.writeFileSync(outFile, html);
   const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
   process.stdout.write(`human-review: wrote ${outFile} (${kb} KB${warnings.length ? `, ${warnings.length} warning(s)` : ""})\n`);
-  if (redact.count()) process.stdout.write(`  ${redact.count()} secret-looking value(s) redacted from embedded file contents\n`);
+  if (redact.count()) process.stdout.write(redactionReport(redact.count(), redact.places(), "from embedded file contents") + "\n");
   if (opts.open) openFile(outFile);
 }
 
+// Why no one would see a browser opened here, or null: CI, an SSH session, or Linux with no display.
+function headlessReason(env = process.env) {
+  if (env.CI && !/^(false|0)$/i.test(env.CI)) return "running in CI";
+  if (env.SSH_CONNECTION || env.SSH_TTY) return "running over SSH";
+  if (process.platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY) return "no display";
+  return null;
+}
+
 function openFile(file) {
+  const why = headlessReason();
+  if (why) {
+    process.stdout.write(`  not opening a browser (${why}); the page is at ${file}\n`);
+    return;
+  }
   const cmd = process.platform === "darwin" ? ["open", [file]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", file]] : ["xdg-open", [file]];
   const r = spawnSync(cmd[0], cmd[1], { stdio: "ignore", detached: true });
   if (r.error || r.status !== 0) process.stdout.write(`  open it manually: ${file}\n`);

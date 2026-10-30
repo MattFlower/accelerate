@@ -3269,7 +3269,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         { class: "foot" },
         h("span", null, `Built ${new Date(meta.builtAt || Date.now()).toLocaleString()}`),
         h("span", null, h("code", null, diff.base.sha.slice(0, 10)), " → ", h("code", null, diff.head.worktree ? "working tree" : diff.head.sha.slice(0, 10))),
-        diff.redactions ? h("span", null, `${plural(diff.redactions, "secret-looking value")} redacted`) : null,
+        diff.redactions ? h("span", { title: (diff.redactedAt || []).join("\n") || null }, `${plural(diff.redactions, "secret-looking value")} redacted`) : null,
         h("span", null, `human-review ${meta.version || ""}`),
       ),
     );

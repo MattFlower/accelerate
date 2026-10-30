@@ -99,7 +99,9 @@ While reading, keep a short inventory. This is your raw material:
   names (modules, roles, flags), domain terms, and abbreviations. Note what
   each one means as you learn it; you'll need it for `background` and `terms`.
 
-Don't re-read the whole diff after this pass. Work from your notes.
+One full pass is enough. Write from your notes rather than reading the whole
+diff again. The precision check (below) sends you back only to the lines each
+claim rests on.
 
 ### 4. Write `recap.json`
 
@@ -114,11 +116,15 @@ What to write, and how, is covered in "Writing for a reviewer" below.
 
 When the draft is done, do the **precision check** (below) before you build.
 
-### 5. Build and open
+### 5. Build
 
 ```bash
 node "${CLAUDE_SKILL_DIR}/scripts/human-review.mjs" build <dir> --open
 ```
+
+`--open` opens the page in the user's default browser, so pass it only when the
+user is at this machine. Leave it off in a CI, SSH, or other remote session. The
+CLI also skips opening when it detects one of those, and prints the path instead.
 
 Use `build <dir> --check` to validate without writing the page while you
 iterate. The build validates `recap.json` against the real diff. Errors name
@@ -135,13 +141,14 @@ rebuild. Never hand over a stale review.
 
 ### 6. Look at it
 
-If you have a browser tool, open `review.html` and check it once. Check that
+This is your own check, separate from `--open`. If you have any way to render a
+page (a browser pane, a headless browser, a screenshot tool), open `review.html`
+with it and check it once. Check that
 wireframes aren't cramped or overlapping, that diagrams render, and that notes
 sit on the lines they describe. If the browser can't open `file://` URLs, serve
 the folder with any static server on localhost. Do one fix-and-rebuild pass,
-not an open-ended polish loop. If you can't render pages (a headless or CI
-run), a clean `build` is your check; say in the handoff that you didn't look at
-it.
+not an open-ended polish loop. If you have no way to render a page, a clean
+`build` is your check; say in the handoff that you didn't look at it.
 
 ### 7. Hand off
 
@@ -510,9 +517,10 @@ Rules for visuals:
 
 Before you build, go through everything a reviewer will take on trust (every
 annotation, key-change `summary`, concern and file `note`, `focus` why, `ask`
-line, `tests` entry, and `notExamined` entry) and test each one. Run `git`, `grep`, or the code itself
-to check a claim; don't rely on memory of the diff. Drop or fix any
-that fails:
+line, `tests` entry, and `notExamined` entry) and test each one. Re-open the
+lines the claim rests on, in `review.txt` or the source, and run `git`, `grep`,
+or the code where that helps. Don't trust memory or your notes. This is a check
+of each claim, not a second read of the whole diff. Drop or fix any that fails:
 
 1. **Supported by the diff?** Point to the `review.txt` line that makes it true.
    If it depends on code outside the diff, read that code and show it in a `code`
@@ -576,10 +584,12 @@ line quoted) or to a named block. When the user pastes it:
 - The page contains source code. Treat `review.html` like the repo itself, and
   don't upload or publish it anywhere unless the user asks.
 - `collect` and `build` redact secret-looking values (API keys, tokens, private
-  keys, `.env` values, passwords in config files) and report how many:
-  `collect` for the diff, `build` for the full file contents it embeds. It's a
-  heuristic, so never copy a secret into `recap.json`, a wireframe, or an API
-  example; use obvious placeholders.
+  keys, `.env` values, passwords in config files) and report how many and where
+  (`path:line`). `collect` covers the diff. `build` covers the full file
+  contents it embeds, including lines outside the diff, so it can report values
+  `collect` didn't. Look at each spot: if a real code line was blanked, say so in
+  the handoff. It's a heuristic, so never copy a secret into `recap.json`, a
+  wireframe, or an API example; use obvious placeholders.
 - The page's Content-Security-Policy blocks all network requests, so remote
   images or stylesheets in your HTML or Markdown won't load.
 - The signals name contributors (from git history), so check before sharing the
