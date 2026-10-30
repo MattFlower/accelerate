@@ -1102,7 +1102,7 @@ function makeRedactor() {
   const places = new Set();
   const note = (where) => {
     count++;
-    if (where && places.size < REDACT_MAX_PLACES) places.add(where);
+    if (where) places.add(where);
   };
   const fn = (s, file, where = file) => {
     if (typeof s !== "string" || !s) return s;
@@ -1134,6 +1134,7 @@ function makeRedactor() {
   };
   fn.count = () => count;
   fn.places = () => [...places];
+  fn.placeCount = () => places.size;
   fn.bump = note;
   return fn;
 }
@@ -1272,12 +1273,12 @@ function hostedRepoName(remote) {
   return m && !/^file:/i.test(remote) ? m[1] : null;
 }
 
-// "3 secret-looking value(s) redacted from the diff: a.ts:4, b.yml:9" — with the spots, so the
-// agent can check that no real code line was blanked.
-function redactionReport(n, places = [], from) {
+// "3 secret-looking value(s) redacted at a.ts:4, b.yml:9" — with the spots, so the agent can
+// check that no real code line was blanked.
+function redactionReport(n, places = [], totalPlaces = places.length, from = "") {
   const shown = places.slice(0, 8);
-  const more = n > shown.length ? `, +${n - shown.length} more` : "";
-  return `  ${n} secret-looking value(s) redacted ${from}${shown.length ? `: ${shown.join(", ")}${more}` : ""}`;
+  const more = totalPlaces > shown.length ? `, and ${totalPlaces - shown.length} more place(s)` : "";
+  return `  ${n} secret-looking value(s) redacted${from}${shown.length ? ` at ${shown.join(", ")}${more}` : ""}`;
 }
 
 function collect(opts) {
@@ -1416,7 +1417,7 @@ function collect(opts) {
     collectedAt: new Date().toISOString(),
     root,
     repo: repoName,
-    remote: remote.replace(/\/\/[^@/]+@/, "//"),
+    remote: hostedRepoName(remote) ? remote.replace(/\/\/[^@/]+@/, "//") : "", // a local path says nothing a reader needs
     base: { ref: baseRef, sha: baseSha },
     head: { ref: headRef, sha: headSha, worktree },
     pr,
@@ -1426,7 +1427,8 @@ function collect(opts) {
     untracked,
     fingerprint,
     redactions: redact.count(),
-    redactedAt: redact.places(),
+    redactedAt: redact.places().slice(0, REDACT_MAX_PLACES),
+    redactedPlaces: redact.placeCount(),
     signals,
     blast,
     commits,
@@ -1450,7 +1452,7 @@ function collect(opts) {
   out.push(`  base  ${baseRef} @ ${baseSha.slice(0, 10)}`);
   out.push(`  head  ${headRef} @ ${headSha.slice(0, 10)}${worktree ? " + uncommitted changes" : ""}${pr ? `  (PR #${pr.number})` : ""}`);
   out.push(`  ${commits.length} commit${commits.length === 1 ? "" : "s"}${untracked.length ? `, ${untracked.length} untracked file(s) included` : ""}`);
-  if (diff.redactions) out.push(redactionReport(diff.redactions, diff.redactedAt, "from the diff"));
+  if (diff.redactions) out.push(redactionReport(diff.redactions, diff.redactedAt, diff.redactedPlaces));
   out.push("");
   const w = Math.min(70, Math.max(...files.map((f) => f.path.length), 10));
   for (const f of files) {
@@ -2233,7 +2235,7 @@ function build(opts) {
     diff: { ...diff, root: undefined, patchSpec: undefined },
     contents,
     assets,
-    meta: { builtAt: new Date().toISOString(), version: VERSION, stale, types: [...typesUsed], contentRedactions: redact.count(), contentRedactedAt: redact.places() },
+    meta: { builtAt: new Date().toISOString(), version: VERSION, stale, types: [...typesUsed], contentRedactions: redact.count(), contentRedactedAt: redact.places().slice(0, REDACT_MAX_PLACES) },
   };
 
   const read = (p) => fs.readFileSync(path.join(ASSETS, p), "utf8");
@@ -2264,7 +2266,7 @@ function build(opts) {
   fs.writeFileSync(outFile, html);
   const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
   process.stdout.write(`human-review: wrote ${outFile} (${kb} KB${warnings.length ? `, ${warnings.length} warning(s)` : ""})\n`);
-  if (redact.count()) process.stdout.write(redactionReport(redact.count(), redact.places(), "from embedded file contents") + "\n");
+  if (redact.count()) process.stdout.write(redactionReport(redact.count(), redact.places(), redact.placeCount(), " from embedded file contents") + "\n");
   if (opts.open) openFile(outFile);
 }
 
