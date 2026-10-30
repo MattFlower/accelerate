@@ -205,11 +205,11 @@ svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none;
 
 main.hr-main { padding: 44px clamp(20px, 4vw, 56px) 140px; }
 .hr-inner { max-width: 1280px; margin: 0 auto; }
-.prose { max-width: 74ch; }
+.prose { max-width: 72ch; }
 .prose p, .prose ul, .prose ol { margin: 0 0 0.8em; }
 .prose > :last-child { margin-bottom: 0; }
 .prose ul, .prose ol { padding-left: 1.3em; }
-.prose li + li { margin-top: 0.25em; }
+.prose li + li { margin-top: 0.4em; }
 .prose h3 { font-size: 16px; margin: 1.4em 0 0.4em; }
 .prose h4 { font-size: 15px; margin: 1.2em 0 0.3em; }
 .prose table { border-collapse: collapse; margin: 0.6em 0 1em; font-size: 14px; display: block; overflow-x: auto; }
@@ -296,7 +296,7 @@ button.linklike:hover { text-decoration: underline; text-underline-offset: 2px; 
 .focus-list .t { font-weight: 620; font-size: 15px; line-height: 1.4; }
 .focus-list .t a { color: var(--ink); }
 .focus-list .t a:hover { color: var(--link); }
-.focus-list .w { color: var(--ink-2); font-size: 14px; margin-top: 2px; }
+.focus-list .w { color: var(--ink-2); font-size: 14.5px; line-height: 1.55; margin-top: 3px; max-width: 60ch; }
 .focus-list .w p { margin: 0; }
 .tests-note { grid-column: 1 / -1; padding-top: 26px; border-top: 1px solid var(--rule); }
 .tests-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 48px; }
@@ -331,10 +331,28 @@ button.linklike:hover { text-decoration: underline; text-underline-offset: 2px; 
 .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 7px; border-radius: 99px; border: 1px solid var(--rule-strong); color: var(--muted); white-space: nowrap; line-height: 18px; cursor: help; }
 .tag.author-text { border-style: dashed; }
 .tag.inference { border-style: dotted; margin-right: 8px; }
+/* Orientation: what this code does today, and the project words the page uses */
+.orient { margin: 22px 0 0; max-width: 70ch; padding: 14px 18px 15px; background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); }
+.orient h3 { margin: 0 0 6px; font-size: 13.5px; font-weight: 650; color: var(--ink-2); }
+.orient-bg .prose { font-size: 15.5px; line-height: 1.6; color: var(--ink); }
+.orient-bg .prose p { margin: 0; }
+.orient-bg .prose p + p { margin-top: 8px; }
+.orient-bg + .orient-terms { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.orient-terms dl { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 16px; font-size: 14.5px; line-height: 1.5; }
+.orient-terms dt { font-weight: 620; color: var(--ink); }
+.orient-terms dd { margin: 0; color: var(--ink-2); }
+@media (max-width: 600px) { .orient-terms dl { grid-template-columns: minmax(0, 1fr); gap: 2px; } .orient-terms dd { margin-bottom: 8px; } }
+.term { text-decoration: underline dotted color-mix(in srgb, var(--ink-2) 60%, transparent); text-decoration-thickness: 1.5px; text-underline-offset: 3px; cursor: help; border-radius: 3px; }
+.term:hover, .term:focus-visible { text-decoration-color: var(--link); }
+.term:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.term code { text-decoration: inherit; }
+.term-tip { position: fixed; z-index: 90; padding: 9px 12px 10px; background: var(--surface); color: var(--ink-2); border: 1px solid var(--rule-strong); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14); font-size: 13.5px; line-height: 1.5; }
+.term-tip strong { color: var(--ink); font-weight: 650; }
+
 .ask { margin: 22px 0 0; max-width: 70ch; padding: 4px 0 4px 16px; border-left: 3px solid var(--marker); }
 .ask h3 { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
 .ask ul { margin: 0; padding-left: 1.1em; font-size: 15.5px; line-height: 1.5; }
-.ask li { margin-bottom: 6px; padding-left: 2px; }
+.ask li { margin-bottom: 8px; padding-left: 2px; }
 .ask li::marker { color: var(--muted); }
 .ask-q { margin-top: 8px; font-size: 13.5px; color: var(--muted); }
 .wrap-up { display: grid; gap: 16px; }
@@ -491,14 +509,15 @@ table.code tr.note-row td { padding: 0; background: var(--surface); }
   border-left: 3px solid var(--k, var(--marker));
   background: var(--kw, var(--marker-wash));
   border-radius: 0 8px 8px 0;
-  font-family: var(--sans); font-size: 13.5px; line-height: 1.55; color: var(--ink);
-  white-space: normal; max-width: 92ch;
+  font-family: var(--sans); font-size: 14px; line-height: 1.6; color: var(--ink);
+  white-space: normal; max-width: 80ch;
 }
 .split .note.side-n { margin-left: calc(50% + 10px); }
 .split .note.side-o { margin-right: calc(50% + 10px); }
 .note .nk { display: inline-flex; align-items: center; gap: 5px; font-weight: 650; font-size: 12px; color: var(--k-ink, var(--marker-ink)); margin-bottom: 1px; }
 .note .nk svg.i { width: 13px; height: 13px; }
 .note .nk .ln { font-family: var(--mono); font-weight: 500; color: var(--muted); }
+.note .nt { font-weight: 620; font-size: 14px; line-height: 1.45; margin: 2px 0 3px; }
 .note p { margin: 0; }
 .note p + p { margin-top: 6px; }
 .note.k-cue { --k: var(--ink-2); --kw: var(--sunken); --k-ink: var(--ink); }

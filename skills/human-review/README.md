@@ -6,6 +6,12 @@ single HTML page that a person can review in a few minutes.
 The page leads with the shape of the change, then drops into the code:
 
 - **Title, brief, and risk read**: what changed, for whom, and whether to worry.
+- **Written for a reader new to the code**: a short "Before this change"
+  note on what this part of the system does today, a "Terms used here" list
+  of the project words the page relies on, and a dotted underline on each
+  term's first use in a section (hover or tap it for the meaning). The build
+  warns the agent about long sentences, runs of code names, and undefined
+  abbreviations.
 - **What I need from you**: the kind of feedback the author wants (a decision,
   a second opinion on one area, a check that couldn't be run), right under the
   brief, plus what the tests cover and what they don't.

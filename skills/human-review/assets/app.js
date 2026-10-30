@@ -203,7 +203,7 @@
     }
   }
 
-  function md(text, { inline = false, cls = "prose" } = {}) {
+  function md(text, { inline = false, cls = "prose", terms = true } = {}) {
     const src = String(text ?? "");
     let html;
     try {
@@ -214,8 +214,142 @@
     const el = h(inline ? "span" : "div", { class: inline ? null : cls });
     el.append(htmlFragment(html));
     linkifyRefs(el);
+    if (terms) markTerms(el);
     return el;
   }
+
+  // ───────────────────────────────────────────── project terms
+  //
+  // `terms` are the words a reviewer new to this code would trip on. Each prose snippet marks its
+  // first use of a term; hovering, focusing, or tapping it shows the meaning. Files open lazily, so
+  // "first on the page" depends on what the reader opened; per snippet, the reader always finds one
+  // wherever they land.
+  const termText = (t) => t.term.replace(/`/g, "").trim();
+  const TERMS = (Array.isArray(recap.terms) ? recap.terms : [])
+    .filter((t) => t && typeof t.term === "string" && termText(t) && typeof t.means === "string" && t.means.trim())
+    .map((t) => ({ term: t.term, text: termText(t), means: t.means }));
+  // Same rule as the CLI's: whole words, case-insensitive, an optional -s, -es, -d, or -ed, spaces or hyphens between words.
+  const termPattern = (term) => `(?<![\\w-])${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "[\\s-]+")}(?:s|es|d|ed)?(?![\\w-])`;
+  const TERMS_BY_LENGTH = [...TERMS].sort((a, b) => b.text.length - a.text.length);
+  const TERM_RE = TERMS.length ? new RegExp(TERMS_BY_LENGTH.map((t) => `(${termPattern(t.text)})`).join("|"), "gi") : null;
+  const TERM_EXACT = TERMS_BY_LENGTH.map((t) => new RegExp(`^${termPattern(t.text)}$`, "i"));
+  // Terms already marked in the part of the page being rendered (a section, or one drawn diff), so
+  // a list of bullets marks each term once rather than once per bullet.
+  let termScope = null;
+  const inTermScope = (fn) => {
+    const prev = termScope;
+    termScope = new Set();
+    try {
+      return fn();
+    } finally {
+      termScope = prev;
+    }
+  };
+  const termEl = (i) => h("span", { class: "term", tabindex: "0", dataset: { term: String(i) }, "aria-describedby": "hr-term-tip" });
+
+  function markTerms(el) {
+    if (!TERM_RE) return;
+    const used = termScope || new Set();
+    // A code span that is exactly a term (`canShare`) is wrapped whole.
+    for (const code of el.querySelectorAll("code")) {
+      if (code.closest("pre, a, .term")) continue;
+      const i = TERM_EXACT.findIndex((re, j) => !used.has(j) && re.test(code.textContent.trim()));
+      if (i < 0) continue;
+      used.add(i);
+      const w = termEl(i);
+      code.replaceWith(w);
+      w.append(code);
+    }
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (let node of nodes) {
+      if (used.size === TERMS.length) break;
+      if (node.parentElement && node.parentElement.closest("pre, code, a, h1, h2, h3, h4, h5, h6, .term")) continue;
+      TERM_RE.lastIndex = 0;
+      let m;
+      while ((m = TERM_RE.exec(node.data))) {
+        const i = m.slice(1).findIndex((g) => g !== undefined);
+        if (used.has(i)) continue;
+        used.add(i);
+        const hit = node.splitText(m.index);
+        node = hit.splitText(m[0].length);
+        const w = termEl(i);
+        hit.replaceWith(w);
+        w.append(hit);
+        TERM_RE.lastIndex = 0;
+      }
+    }
+  }
+
+  // One shared definition popover. Hover and keyboard focus show it; a click or tap pins it until
+  // the next click elsewhere, Escape, or scroll.
+  const termTip = h("div", { class: "term-tip", id: "hr-term-tip", role: "tooltip", hidden: true });
+  let tipFor = null;
+  let tipPinned = false;
+  function showTerm(el, pin = false) {
+    const t = TERMS_BY_LENGTH[Number(el.dataset.term)];
+    if (!t) return;
+    if (tipFor !== el) termTip.replaceChildren(h("strong", null, md(t.term, { inline: true, terms: false })), " ", md(t.means, { inline: true, terms: false }));
+    tipFor = el;
+    tipPinned = pin || tipPinned;
+    termTip.hidden = false;
+    placeTip();
+  }
+  function placeTip() {
+    const r = tipFor.getBoundingClientRect();
+    const w = Math.min(340, window.innerWidth - 24);
+    termTip.style.width = `${w}px`;
+    termTip.style.left = `${Math.max(12, Math.min(r.left, window.innerWidth - w - 12))}px`;
+    const below = r.bottom + 8 + termTip.offsetHeight < window.innerHeight;
+    termTip.style.top = `${below ? r.bottom + 6 : r.top - termTip.offsetHeight - 6}px`;
+  }
+  function hideTerm() {
+    termTip.hidden = true;
+    tipFor = null;
+    tipPinned = false;
+  }
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest && e.target.closest(".term");
+    if (el && !tipPinned) showTerm(el);
+  });
+  document.addEventListener("mouseout", (e) => {
+    const el = e.target.closest && e.target.closest(".term");
+    if (el && !tipPinned && !el.contains(e.relatedTarget)) hideTerm();
+  });
+  document.addEventListener("focusin", (e) => {
+    const el = e.target.closest && e.target.closest(".term");
+    if (el) showTerm(el);
+    else if (!tipPinned) hideTerm();
+  });
+  // Capture phase, so a tap on a term inside a clickable row only shows the definition.
+  document.addEventListener(
+    "click",
+    (e) => {
+      const el = e.target.closest && e.target.closest(".term");
+      if (!el) return tipPinned && !termTip.contains(e.target) && hideTerm();
+      e.stopPropagation();
+      e.preventDefault();
+      if (tipPinned && tipFor === el) hideTerm();
+      else showTerm(el, true);
+    },
+    true,
+  );
+  document.addEventListener("keydown", (e) => {
+    // Only when the popover is the thing in use: pinned, or open on the focused term. A popover
+    // shown by hover must not take Escape from, say, the comment editor being typed in.
+    const onTerm = e.target.closest && e.target.closest(".term");
+    if (termTip.hidden || (!tipPinned && !onTerm)) return;
+    if (e.key === "Escape") {
+      hideTerm();
+      e.stopPropagation();
+    } else if ((e.key === "Enter" || e.key === " ") && onTerm) {
+      e.preventDefault();
+      showTerm(onTerm, true);
+    }
+  }, true);
+  // Focusing a term scrolls it into view, so a focused term's popover follows it; any other closes.
+  window.addEventListener("scroll", () => termTip.hidden || (tipFor === document.activeElement ? placeTip() : hideTerm()), { passive: true, capture: true });
 
   // ───────────────────────────────────────────── persistence
 
@@ -534,7 +668,8 @@
       "div",
       { class: `note ${you ? "you" : `k-${k}`}${side ? ` side-${side}` : ""}` },
       acts,
-      h("div", { class: "nk" }, icon(you ? "comment" : k), label || names[k] || "Note", lineLabel ? h("span", { class: "ln" }, lineLabel) : null),
+      h("div", { class: "nk" }, icon(you ? "comment" : k), names[k] || "Note", lineLabel ? h("span", { class: "ln" }, lineLabel) : null),
+      label ? h("div", { class: "nt" }, md(label, { inline: true })) : null,
       you ? h("div", { class: "txt", style: { whiteSpace: "pre-wrap" } }, body) : md(body, { cls: "" }),
     );
   }
@@ -668,6 +803,9 @@
   }
 
   function drawDiff(inst, headless) {
+    return inTermScope(() => drawDiffIn(inst, headless));
+  }
+  function drawDiffIn(inst, headless) {
     const { file, blk } = inst;
     const index = annotationIndex(blk, fileFindingsHidden(file.path));
     const el = inst.el;
@@ -1145,6 +1283,9 @@
     return wrap;
   }
   function drawCode(b, wrap) {
+    return inTermScope(() => drawCodeIn(b, wrap));
+  }
+  function drawCodeIn(b, wrap) {
     wrap.textContent = "";
     const text = contents[b.file];
     const [dir, base] = splitPath(b.file);
@@ -2009,9 +2150,11 @@ ul, ol { margin: 0; padding-left: 18px; }
       diff.pr ? h("a", { href: diff.pr.url, target: "_blank", rel: "noopener" }, `Pull request #${diff.pr.number}`) : null,
     );
     const h1 = h("h1", { id: "hr-title" });
-    h1.append(md(recap.title || "Untitled review", { inline: true }));
+    h1.append(md(recap.title || "Untitled review", { inline: true, terms: false }));
     hero.append(crumbs, h1);
     if (recap.brief) hero.append(h("div", { class: "lede" }, md(recap.brief, { inline: true })));
+    const orient = renderOrientation();
+    if (orient) hero.append(orient);
     const ask = listOf(recap.ask);
     if (ask.length) {
       const nq = listOf(recap.questions).length;
@@ -2089,7 +2232,7 @@ ul, ol { margin: 0; padding-left: 18px; }
               "div",
               null,
               h("strong", null, "Your read first. "),
-              `The agent's ${plural(held, "finding")} (its risk read, the lines it flagged, its risk callouts, and what it didn't examine) ${held === 1 ? "is" : "are"} held back so ${held === 1 ? "it doesn't" : "they don't"} steer where you look. A file's notes appear when you mark it Viewed; the rest open once you've viewed every file.`,
+              `The agent's ${plural(held, "finding")} ${held === 1 ? "is" : "are"} hidden for now, so ${held === 1 ? "it doesn't" : "they don't"} steer where you look. Mark a file Viewed to see its notes. The rest, including the risk read, open once you've viewed every file.`,
               h(
                 "div",
                 { class: "held-actions" },
@@ -2118,6 +2261,27 @@ ul, ol { margin: 0; padding-left: 18px; }
       hero.append(notice);
     }
     return hero;
+  }
+
+  // What this part of the system does today, and the project words the page uses, for a reviewer
+  // who hasn't worked in this code. Open from the start; it's short, and people who know the code
+  // skip it in a glance.
+  function renderOrientation() {
+    const bg = typeof recap.background === "string" ? recap.background.trim() : "";
+    if (!bg && !TERMS.length) return null;
+    return h(
+      "div",
+      { class: "orient", id: "background" },
+      bg ? h("div", { class: "orient-bg" }, h("h3", null, "Before this change"), md(bg, { cls: "prose", terms: false })) : null,
+      TERMS.length
+        ? h(
+            "div",
+            { class: "orient-terms", id: "terms" },
+            h("h3", null, "Terms used here"),
+            h("dl", null, TERMS.map((t) => [h("dt", null, md(t.term, { inline: true, terms: false })), h("dd", null, md(t.means, { inline: true, terms: false }))])),
+          )
+        : null,
+    );
   }
 
   // Provenance of a claim: computed from git or paths, taken from commit wording, or the agent's reading.
@@ -2228,7 +2392,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         "div",
         { class: "check-card" },
         h("h3", null, icon("comment"), "Anything else?"),
-        h("p", { class: "wrap-sub" }, "Is there something about this change that nothing on this page made you look at? It goes into your feedback."),
+        h("p", { class: "wrap-sub" }, "Did anything about this change need a look that this page didn't point you to? Your answer goes into your feedback."),
         ta,
       ),
     );
@@ -2249,13 +2413,14 @@ ul, ol { margin: 0; padding-left: 18px; }
 
   function renderSections() {
     const out = [];
-    for (const s of recap.sections || []) {
-      const sec = sectionShell(s.id, s.title);
-      if (s.intro) sec.append(h("div", { style: { marginBottom: "22px" } }, md(s.intro)));
-      sec.append(h("div", { class: "blocks" }, s.blocks.map((b) => renderBlock(b, s.title))));
-      out.push(sec);
-    }
+    for (const s of recap.sections || []) out.push(inTermScope(() => renderSection(s)));
     return out;
+  }
+  function renderSection(s) {
+    const sec = sectionShell(s.id, s.title);
+    if (s.intro) sec.append(h("div", { style: { marginBottom: "22px" } }, md(s.intro)));
+    sec.append(h("div", { class: "blocks" }, s.blocks.map((b) => renderBlock(b, s.title))));
+    return sec;
   }
 
   // Where the names this change defines, edits, or removes appear elsewhere at head. A text search
@@ -2279,7 +2444,7 @@ ul, ol { margin: 0; padding-left: 18px; }
         "p",
         { class: "blast-lede" },
         tagChip("verified", `Found with ${br.cmd || "git grep -w"}. Lines that contain the name as a whole word, at the head commit. A same-named symbol elsewhere matches too, and dynamic calls don't.`),
-        "Lines that mention each name outside the lines this page shows, found by text search. A mention isn't proof of a call. Comment and doc lines are counted separately.",
+        "Where each name appears outside the lines this page shows. It's a text search, so a mention isn't proof of a call. Comment and doc lines are counted separately.",
       ),
     );
     if (rows.length)
@@ -3086,18 +3251,18 @@ ul, ol { margin: 0; padding-left: 18px; }
     const main = h("main", { class: "hr-main", id: "main" });
     const inner = h("div", { class: "hr-inner" });
     main.append(inner);
-    inner.append(renderHero());
-    const ov = renderOverview();
+    inner.append(inTermScope(renderHero));
+    const ov = inTermScope(renderOverview);
     if (ov) inner.append(ov);
     for (const s of renderSections()) inner.append(s);
-    const kc = renderKeyChanges();
+    const kc = inTermScope(renderKeyChanges);
     if (kc) inner.append(kc);
-    const br = renderBlastRadius();
+    const br = inTermScope(renderBlastRadius);
     if (br) inner.append(br);
-    const ch = renderChecks();
+    const ch = inTermScope(renderChecks);
     if (ch) inner.append(ch);
-    inner.append(renderFiles());
-    inner.append(renderWrapUp());
+    inner.append(inTermScope(renderFiles));
+    inner.append(inTermScope(renderWrapUp));
     inner.append(
       h(
         "footer",
@@ -3112,6 +3277,7 @@ ul, ol { margin: 0; padding-left: 18px; }
     const top = renderTop();
     const side = renderSide();
     root.replaceChildren(top, h("div", { class: "hr-shell" }, side, main));
+    document.body.append(termTip);
     root.removeAttribute("aria-busy");
     renderDrawer();
     updateCounts();

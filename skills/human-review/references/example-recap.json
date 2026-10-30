@@ -1,40 +1,63 @@
 {
   "title": "Read-only share links for project boards",
-  "brief": "Owners can now create a public, read-only link to a board, pick when it expires, and revoke it. Links are stored as SHA-256 hashes, and a project flips to *Shared by link* while any link is live.",
+  "brief": "Board owners can now create share links, which let anyone view a board without signing in. Owners choose when each link expires, and they can turn it off at any time.",
+  "background": "Teamboard is a small app for project boards. Until now every board was private: only members of a project could see it. A member's role (owner, editor, or viewer) decides what they may do. Each route looks up that role with `roleFor` in `permissions.ts` and refuses the request if the role doesn't allow it.",
+  "terms": [
+    {
+      "term": "share link",
+      "means": "A URL that lets anyone open one board, read-only, without signing in."
+    },
+    {
+      "term": "token",
+      "means": "The random secret at the end of a share link (`/s/<token>`). Whoever has it can view the board."
+    },
+    {
+      "term": "revoke",
+      "means": "Turn a link off. The row stays in `share_links` with a `revoked_at` time; it isn't deleted."
+    },
+    {
+      "term": "live link",
+      "means": "A link that hasn't been revoked and hasn't passed its expiry date."
+    },
+    {
+      "term": "`canShare`",
+      "means": "The new permission check for creating and revoking links. Only owners pass it."
+    }
+  ],
   "risk": {
     "level": "medium",
-    "why": "Adds the first unauthenticated route (`GET /s/:token`). The *Never* expiry option can't actually be chosen, and expired links keep a board marked as shared."
+    "why": "Adds the first route that works without signing in (`GET /s/:token`). It also has two bugs: choosing *Never* still creates a 7-day link, and a board whose links have all expired still shows as shared."
   },
   "ask": [
-    "Decide whether public links may be created without an expiry.",
-    "Look closely at `GET /s/:token`: it is the first route that skips the session check."
+    "Look closely at `GET /s/:token`. It is the first route that doesn't require signing in.",
+    "A skim is enough for the popover and the header. They display data and pass the owner's choices up to their parent."
   ],
   "summary": [
-    "New `share_links` table (hashed tokens, expiry, soft revoke) and a `projects.visibility` column.",
-    "Three routes: create and revoke links (owners only), plus a public `GET /s/:token` that returns the board read-only.",
-    "New `canShare` permission: owners only. Editors keep rename but can't share.",
-    "Project header gets a **Share** button and a *Shared by link* pill; the button opens a new share popover.",
-    "Tests for token hashing, expiry, revocation, and the new permission."
+    "A new `share_links` table holds one row per link: a hash of its token, its expiry date, and when it was revoked.",
+    "Projects get a `visibility` column. It is `private`, or `link` while the board has a live link.",
+    "Three new routes. Owners can create and revoke links, and anyone with a link can view the board at `GET /s/:token`.",
+    "A new `canShare` permission lets owners share. Editors can still rename a board but can't share it.",
+    "The project header gets a **Share** button for owners and a *Shared by link* badge. The button opens a popover for managing links."
   ],
   "focus": [
     {
       "title": "The public route",
-      "why": "First endpoint with no session. Check it can only ever return a board's id and name.",
+      "why": "This is the first route that works without signing in. Check that it can only return the board's id and name.",
       "ref": "src/server/routes.ts:49"
     },
     {
-      "title": "How the `ttlDays` default is chosen",
-      "why": "Check what an explicit `null` (the popover's *Never*) turns into.",
+      "title": "How the expiry default is chosen",
+      "why": "Check how the route picks an expiry, both when the request names one and when it doesn't.",
       "ref": "src/server/routes.ts:31"
     },
     {
-      "title": "Token storage and lookup",
-      "why": "Raw token is returned once; only the hash is stored. Expiry and revocation are checked on every resolve.",
+      "title": "Storing and checking tokens",
+      "why": "The raw token is shown once, and only its hash is saved. Each visit checks expiry and revocation again.",
       "ref": "src/server/shareLinks.ts:29"
     },
     {
-      "title": "When a board stops being “shared”",
-      "why": "Check every way a link stops being live (revoked, expired) and whether visibility follows.",
+      "title": "When a board stops being shared",
+      "why": "Check each way a link stops working (revoked or expired), and whether the *Shared by link* badge follows.",
       "ref": "src/server/shareLinks.ts:45"
     }
   ],
@@ -57,9 +80,9 @@
             "surface": "browser",
             "url": "teamboard.app/projects/42",
             "height": 250,
-            "html": "<div style='display:flex;flex-direction:column;gap:16px;padding:18px 22px;height:100%'><div style='display:flex;align-items:center;gap:12px;width:100%'><h1>Q3 Launch Plan</h1><span class='wf-pill' data-change='added' data-note='**Shared by link** pill appears while any link is live (`projects.visibility = link`).'>Shared by link</span><div style='flex:1'></div><button>Rename</button><button data-change='added' data-note='**Share** is only rendered for owners — editors and viewers never see it.'><span data-icon='link'></span>Share</button><button aria-label='More'><span data-icon='more'></span></button></div><hr><div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px'><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>To do</h3><div class='wf-box'>Draft launch email</div><div class='wf-box'>Book demo slots</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Doing</h3><div class='wf-box'>Pricing page copy</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Done</h3><div class='wf-box'>Beta feedback summary</div></div></div></div>"
+            "html": "<div style='display:flex;flex-direction:column;gap:16px;padding:18px 22px;height:100%'><div style='display:flex;align-items:center;gap:12px;width:100%'><h1>Q3 Launch Plan</h1><span class='wf-pill' data-change='added' data-note='The **Shared by link** badge shows while the board has a live link.'>Shared by link</span><div style='flex:1'></div><button>Rename</button><button data-change='added' data-note='Only owners see **Share**.'><span data-icon='link'></span>Share</button><button aria-label='More'><span data-icon='more'></span></button></div><hr><div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px'><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>To do</h3><div class='wf-box'>Draft launch email</div><div class='wf-box'>Book demo slots</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Doing</h3><div class='wf-box'>Pricing page copy</div></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px'><h3>Done</h3><div class='wf-box'>Beta feedback summary</div></div></div></div>"
           },
-          "caption": "Project header as an owner sees it. Layout inferred from `ProjectHeader.tsx`; board columns are illustrative."
+          "caption": "The project header as an owner sees it. The layout is inferred from `ProjectHeader.tsx`; the board columns are made up."
         },
         {
           "type": "compare",
@@ -78,7 +101,7 @@
             "surface": "popover",
             "html": "<div style='display:flex;flex-direction:column;gap:12px;padding:16px'><div><h2>Share</h2><small>Anyone with the link can view this board. They can't edit it.</small></div><div style='display:flex;gap:8px'><select><option>Expires: 7 days</option></select><button class='primary'>Create link</button></div><div class='wf-card' style='display:flex;flex-direction:column;gap:8px;padding:10px' data-change='added'><div style='display:flex;align-items:center;gap:8px'><code style='font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>/s/k3J9…x2Qa</code><button class='danger' style='padding:3px 10px'>Revoke</button></div><small>Expires Oct 13, 2026</small></div></div>"
           },
-          "caption": "The *Expires* menu offers 1 day, 7 days, 30 days, and Never; the choice is sent as `ttlDays`."
+          "caption": "The *Expires* menu offers 1 day, 7 days, 30 days, and Never. The choice is sent to the server as `ttlDays`."
         },
         {
           "type": "states",
@@ -138,7 +161,7 @@
               ]
             }
           ],
-          "caption": "Highlighted cells are new in this change. Link visitors get `role: \"viewer\"` and `readOnly: true` from the public route."
+          "caption": "Highlighted cells are new. The public route treats a link visitor as a viewer and marks the board read-only."
         }
       ]
     },
@@ -148,12 +171,12 @@
         {
           "type": "diagram",
           "id": "layers",
-          "caption": "Where the new pieces sit. Green is new; yellow changed.",
+          "caption": "Where the new pieces sit. Green is new; yellow is changed.",
           "html": [
             "<div class='dg-lanes'>",
-            "  <div class='dg-lane'><div class='dg-title'>Web</div><div class='dg-node changed'><b>ProjectHeader</b><small>Share button, pill</small></div><div class='dg-node added'><b>SharePopover</b><small>create / revoke</small></div></div>",
+            "  <div class='dg-lane'><div class='dg-title'>Web</div><div class='dg-node changed'><b>ProjectHeader</b><small>Share button, badge</small></div><div class='dg-node added'><b>SharePopover</b><small>create / revoke</small></div></div>",
             "  <div class='dg-lane'><div class='dg-title'>Routes</div><div class='dg-node changed'><b>routes.ts</b><small>+3 routes, 1 public</small></div></div>",
-            "  <div class='dg-lane'><div class='dg-title'>Domain</div><div class='dg-node added'><b>shareLinks.ts</b><small>token lifecycle</small></div><div class='dg-node changed'><b>permissions.ts</b><small>+ canShare</small></div></div>",
+            "  <div class='dg-lane'><div class='dg-title'>Domain</div><div class='dg-node added'><b>shareLinks.ts</b><small>create, check, revoke</small></div><div class='dg-node changed'><b>permissions.ts</b><small>+ canShare</small></div></div>",
             "  <div class='dg-lane'><div class='dg-title'>Data</div><div class='dg-node store added'><b>share_links</b></div><div class='dg-node store changed'><b>projects</b><small>+ visibility</small></div></div>",
             "</div>"
           ]
@@ -176,13 +199,13 @@
                   "name": "project_id",
                   "type": "INTEGER",
                   "fk": "projects.id",
-                  "note": "`ON DELETE CASCADE`, indexed"
+                  "note": "Deleted with its project (`ON DELETE CASCADE`). Indexed."
                 },
                 {
                   "name": "token_hash",
                   "type": "TEXT",
                   "unique": true,
-                  "note": "SHA-256 of the token, hex"
+                  "note": "Hash of the token (SHA-256)"
                 },
                 {
                   "name": "created_by",
@@ -193,13 +216,13 @@
                   "name": "expires_at",
                   "type": "TEXT",
                   "nullable": true,
-                  "note": "NULL = never"
+                  "note": "Empty means the link never expires"
                 },
                 {
                   "name": "revoked_at",
                   "type": "TEXT",
                   "nullable": true,
-                  "note": "Soft revoke"
+                  "note": "Set when the link is revoked. The row is kept."
                 },
                 {
                   "name": "created_at",
@@ -229,7 +252,7 @@
                   "name": "visibility",
                   "type": "TEXT 'private' | 'link'",
                   "change": "added",
-                  "note": "Defaults to `private`; existing rows are backfilled by the default"
+                  "note": "Defaults to `private`, so existing rows need no update"
                 },
                 {
                   "name": "created_at",
@@ -254,19 +277,19 @@
         {
           "type": "callout",
           "kind": "note",
-          "title": "Migration is additive",
-          "md": "`002_share_links.sql` only creates a table and adds a defaulted column. There is no down migration."
+          "title": "The migration only adds",
+          "md": "`002_share_links.sql` creates a table and adds a column with a default. Nothing is dropped or rewritten, and there is no down migration."
         },
         {
           "type": "code",
           "id": "fk-pragma",
           "file": "src/db/client.ts",
-          "summary": "Unchanged, but the new `ON DELETE CASCADE` depends on it.",
+          "summary": "Unchanged, but deleting a project's links depends on it.",
           "annotations": [
             {
               "line": 5,
               "kind": "note",
-              "text": "SQLite ignores foreign keys unless this pragma is on, so deleting a project only removes its links because of this line."
+              "text": "SQLite ignores foreign keys unless this setting is on. Without it, deleting a project would leave its links behind."
             }
           ]
         },
@@ -279,7 +302,7 @@
               "path": "/projects/{id}/share-links",
               "change": "added",
               "auth": "owner",
-              "summary": "Create a link. Returns the raw token exactly once, inside `url`.",
+              "summary": "Create a link. The response holds the raw token inside `url`, and this is the only time the server sends it.",
               "params": [
                 {
                   "name": "id",
@@ -291,7 +314,7 @@
                   "name": "ttlDays",
                   "in": "body",
                   "type": "integer 1–90 | null",
-                  "note": "Defaults to 7. The popover sends `null` for *Never*."
+                  "note": "How many days the link lasts. Defaults to 7. The popover sends `null` for *Never*."
                 }
               ],
               "request": {
@@ -320,7 +343,7 @@
               "path": "/projects/{id}/share-links/{linkId}",
               "change": "added",
               "auth": "owner",
-              "summary": "Soft-revoke a link. If no live links remain, the project goes back to `private`.",
+              "summary": "Revoke a link. The row is kept and marked revoked. If no live links remain, the project goes back to `private`.",
               "responses": [
                 {
                   "status": 204,
@@ -338,7 +361,7 @@
               "path": "/s/{token}",
               "change": "added",
               "auth": "public",
-              "summary": "Resolve a token to a read-only board. Unknown, expired, and revoked tokens all return the same 404.",
+              "summary": "Look up a token and return the board, read-only. Unknown, expired, and revoked tokens all get the same 404.",
               "responses": [
                 {
                   "status": 200,
@@ -357,7 +380,7 @@
         {
           "type": "mermaid",
           "id": "resolve-flow",
-          "caption": "How a visitor's request is resolved. The token is hashed before the lookup, so the database never sees it.",
+          "caption": "How a visitor's request is handled. The token is hashed before the lookup, so the raw token never reaches the database.",
           "source": "sequenceDiagram\n  participant V as Link visitor\n  participant R as GET /s/:token\n  participant S as resolveShareLink\n  participant DB as share_links\n  V->>R: /s/k3J9…x2Qa\n  R->>S: token\n  S->>S: sha256(token)\n  S->>DB: WHERE token_hash = ?\n  DB-->>S: row or nothing\n  alt revoked, expired, or missing\n    S-->>R: null\n    R-->>V: 404 link_not_found\n  else live\n    S-->>R: { projectId }\n    R-->>V: 200 { id, name } read-only\n  end"
         }
       ]
@@ -366,76 +389,78 @@
   "keyChanges": [
     {
       "file": "src/server/routes.ts",
-      "summary": "Adds the create, revoke, and public resolve routes. Create and revoke are gated on the new `canShare`; the public route needs no session.",
+      "summary": "Adds three routes: create a link, revoke a link, and the public page for a link. Create and revoke require `canShare`; the public route needs no sign-in.",
       "annotations": [
         {
           "line": 29,
           "kind": "note",
-          "text": "Gate is `canShare`, not `canEdit` — editors get a 403 here."
+          "text": "This checks `canShare`, not `canEdit`, so editors get a 403 here."
         },
         {
           "line": 31,
           "kind": "risk",
-          "text": "`req.body.ttlDays ?? 7` turns an explicit `null` (the popover's *Never*) into 7. Use `'ttlDays' in req.body ? req.body.ttlDays : 7`."
+          "text": "`req.body.ttlDays ?? 7` replaces `null` with 7, and `null` is what the popover sends for *Never*. Use `'ttlDays' in req.body ? req.body.ttlDays : 7` to keep an explicit `null`.",
+          "title": "*Never* becomes 7 days"
         },
         {
           "line": 36,
           "kind": "note",
-          "text": "The only place the raw token ever leaves the server."
+          "text": "This response is the only place the raw token leaves the server."
         },
         {
           "line": 49,
           "to": 55,
           "kind": "decision",
-          "text": "Public route. It selects only `id, name`, so board contents aren't exposed by this route alone. Unknown, expired, and revoked tokens all return the same 404, so a visitor can't tell them apart."
+          "text": "The public route. It selects only `id` and `name`, so it can't expose what's on the board. Unknown, expired, and revoked tokens all get the same 404, so a visitor can't tell which case they hit."
         }
       ]
     },
     {
       "file": "src/server/shareLinks.ts",
-      "summary": "New module that owns token generation, hashing, lookup, and revocation, and keeps `projects.visibility` in sync.",
+      "summary": "A new module for the whole life of a link: create it, check it on each visit, and revoke it. It also keeps `projects.visibility` up to date.",
       "annotations": [
         {
           "line": 13,
           "kind": "praise",
-          "text": "Tokens are hashed with SHA-256 before storage, so a database leak doesn't leak working links."
+          "text": "Tokens are hashed before they are stored, so a leaked database doesn't give anyone working links."
         },
         {
           "line": 17,
           "kind": "note",
-          "text": "24 random bytes → 32-char base64url token (192 bits)."
+          "text": "24 random bytes, written as 32 URL-safe characters. That is 192 bits, far too many to guess."
         },
         {
           "line": 24,
           "kind": "question",
-          "text": "The insert and the visibility update aren't in a transaction. Fine for SQLite in practice, but worth a `db.transaction` if this moves to Postgres."
+          "text": "The insert and the visibility update don't run in one transaction. That's fine on SQLite in practice. If this moves to Postgres, wrap them in `db.transaction`."
         },
         {
           "line": 36,
           "kind": "note",
-          "text": "Expiry is enforced at read time — nothing deletes old rows."
+          "text": "Expiry is checked when a link is used. Nothing deletes old rows."
         },
         {
           "line": 45,
           "to": 47,
           "kind": "risk",
-          "text": "Counts links with `revoked_at IS NULL` but ignores `expires_at`. When every link has simply expired, the project stays `link` and keeps showing *Shared by link*."
+          "text": "This counts links that aren't revoked, but it ignores `expires_at`. When every link has simply expired, the project stays `link` and keeps showing *Shared by link*.",
+          "title": "Expired links keep a board shared"
         }
       ]
     },
     {
       "file": "src/web/components/ProjectHeader.tsx",
-      "summary": "Header renders the *Shared by link* pill and an owner-only **Share** button that toggles the popover.",
+      "summary": "The header shows the *Shared by link* badge, and a **Share** button for owners that opens the popover.",
       "annotations": [
         {
           "line": 16,
           "kind": "decision",
-          "text": "Re-implements `canShare` on the client instead of importing it; the server enforces the real check."
+          "text": "The component repeats the `canShare` rule instead of importing it. The server still enforces the real check."
         },
         {
           "line": 21,
           "kind": "note",
-          "text": "Pill is driven by `project.visibility`, which `shareLinks.ts` keeps in sync."
+          "text": "The badge follows `project.visibility`, which `shareLinks.ts` keeps up to date."
         },
         {
           "line": 24,
@@ -446,59 +471,59 @@
     },
     {
       "file": "src/server/permissions.ts",
-      "summary": "One new permission. Owners only.",
+      "summary": "One new permission, for owners only.",
       "annotations": [
         {
           "line": 21,
           "to": 23,
           "kind": "note",
-          "text": "Deliberately narrower than `canEdit`."
+          "text": "Deliberately stricter than `canEdit`: editors can't share."
         }
       ]
     },
     {
       "file": "src/db/migrations/002_share_links.sql",
-      "summary": "Creates `share_links` and adds `projects.visibility` with a default, so existing rows need no backfill.",
+      "summary": "Creates `share_links` and adds `projects.visibility` with a default, so existing rows need no update.",
       "annotations": [
         {
           "line": 4,
           "kind": "note",
-          "text": "Links are deleted with their project."
+          "text": "A project's links are deleted along with it."
         },
         {
           "line": 14,
           "to": 15,
           "kind": "note",
-          "text": "SQLite allows `ADD COLUMN` with a `CHECK` because the default satisfies it."
+          "text": "SQLite allows adding a column with a `CHECK` here because the default value passes the check."
         }
       ]
     }
   ],
   "questions": [
-    "Should *Never expires* exist at all for public links, or should 90 days be the ceiling?",
-    "Should editors be allowed to create links, or is owners-only right?"
+    "Should a public link be allowed to never expire, or should 90 days be the limit?",
+    "Should editors be able to create links, or only owners?"
   ],
   "checks": {
     "verified": [
       {
-        "text": "New unit tests cover token hashing, expiry, revocation, and `canShare`.",
+        "text": "The new unit tests for hashing, expiry, revocation, and `canShare` pass.",
         "cmd": "npm test"
       },
-      "Migration applies cleanly on a copy of the seed database."
+      "The migration applies cleanly to a copy of the seed database."
     ],
     "manual": [
       "As an owner, create a link with **Never** selected and note the expiry it shows.",
       "Open a link in a private window and confirm the board is read-only.",
-      "Revoke the last link and confirm the *Shared by link* pill disappears."
+      "Revoke the last link and confirm the *Shared by link* badge disappears."
     ]
   },
   "tests": {
     "covers": [
-      "Token hashing, lookup, expiry, and revocation in `tests/shareLinks.test.ts`.",
-      "The `canShare` role check in `tests/permissions.test.ts`."
+      "Hashing, lookup, expiry, and revocation, in `tests/shareLinks.test.ts`.",
+      "The `canShare` check, in `tests/permissions.test.ts`."
     ],
     "doesNotCover": [
-      "The HTTP routes: the tests call `shareLinks.ts` and `permissions.ts` directly.",
+      "The HTTP routes. The tests call `shareLinks.ts` and `permissions.ts` directly.",
       "The popover and header components."
     ]
   },
@@ -513,7 +538,7 @@
     },
     "src/db/migrations/002_share_links.sql": {
       "review": "careful",
-      "note": "New table + column."
+      "note": "A new table and a new column."
     },
     "src/server/permissions.ts": {
       "review": "careful",
@@ -521,19 +546,19 @@
     },
     "src/server/routes.ts": {
       "review": "careful",
-      "note": "Three new routes, one public."
+      "note": "Three new routes; one needs no sign-in."
     },
     "src/server/shareLinks.ts": {
       "review": "careful",
-      "note": "Token lifecycle."
+      "note": "Creates, checks, and revokes links."
     },
     "src/web/components/ProjectHeader.tsx": {
       "review": "skim",
-      "note": "Share button + pill."
+      "note": "The Share button and the shared badge."
     },
     "src/web/components/SharePopover.tsx": {
       "review": "skim",
-      "note": "New popover; presentational."
+      "note": "New popover. Display only."
     },
     "tests/permissions.test.ts": {
       "review": "skim"
@@ -548,8 +573,8 @@
   },
   "concerns": [
     {
-      "title": "Token storage and lookup",
-      "why": "How a link is created, stored as a hash, resolved, and revoked.",
+      "title": "Storing and checking links",
+      "why": "How a link is created, saved as a hash, checked on each visit, and revoked.",
       "files": [
         "src/db/migrations/002_share_links.sql",
         "src/server/shareLinks.ts",
@@ -567,7 +592,7 @@
     },
     {
       "title": "Share UI",
-      "why": "The owner-only Share button, the pill, and the popover.",
+      "why": "The owner-only Share button, the shared badge, and the popover.",
       "files": [
         "src/web/components/ProjectHeader.tsx",
         "src/web/components/SharePopover.tsx"

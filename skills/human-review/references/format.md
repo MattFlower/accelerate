@@ -18,7 +18,7 @@ Conventions:
 - Any block can have an `id`: unique across the file, starting with a letter,
   using only letters, digits, `-` and `_`. Give one to blocks you reference
   from `focus` (`"ref": "#schema"`). The others get ids derived from their
-  content. The page reserves `top`, `main`, `app`, `overview`, `key-changes`,
+  content. The page reserves `top`, `main`, `app`, `overview`, `background`, `terms`, `key-changes`,
   `ask`, `signals`, `blast-radius`, `checks`, `wrap-up`, `files`, `hr-data`, `hr-title`, and `hr-top-title`, and ids
   starting with `file-`, `v-`, `mmd` plus a digit, or `t` plus digits and `-`.
 - The page loads nothing from the network: its Content-Security-Policy blocks
@@ -32,9 +32,11 @@ Conventions:
 ```jsonc
 {
   "title": "Read-only share links for project boards",   // required, ≤ 70 chars
-  "brief": "Owners can now create a public, read-only link…",  // 1–3 sentences
+  "brief": "Board owners can now create share links…",  // 1–3 sentences
+  "background": "Teamboard is a small app for project boards. Until now every board was private…",  // 2–4 sentences: the system before this change
+  "terms": [{ "term": "live link", "means": "A link that hasn't been revoked and hasn't passed its expiry date." }],  // 3–8 project words
   "risk": { "level": "medium", "why": "Adds the first unauthenticated route…" },
-  "ask": ["Decide whether *Never expires* should exist.", "Second opinion on how the token is hashed."],  // 1–3 lines: what you need
+  "ask": ["Look closely at the public route; it's the first with no sign-in.", "A skim is enough for the popover."],  // 1–3 lines: what you need
   "summary": ["New `share_links` table…", "Three routes…"],   // 2–5 bullets
   "focus": [                                               // reading order, 3–6 stops
     { "title": "The public route", "why": "First endpoint with no session…", "ref": "src/server/routes.ts:49" },
@@ -68,10 +70,12 @@ Conventions:
 | Field | Notes |
 | --- | --- |
 | `risk.level` | `"low"`, `"medium"`, or `"high"` |
+| `background` | Two to four plain sentences on what this part of the system does today, shown open under the brief as "Before this change". Visible from the start: describe, don't evaluate. |
+| `terms[]` | `{ "term", "means" }` pairs, up to about eight: project words a newcomer wouldn't know. Listed under the background as "Terms used here"; each term's first use in a section is underlined, and hovering, focusing, or tapping it shows `means`. A term matches whole words, case-insensitively, with an optional -s, -es, -d, or -ed ("revoke" also matches "revoked"); spaces and hyphens are interchangeable. Write a code name in backticks (`` "`canShare`" ``); it then matches a code span with exactly that text. |
 | `ask[]` | Up to three short lines on the kind of feedback wanted, shown under the brief as "What I need from you". Visible from the start, so describe what you want; don't state a finding. |
 | `tests` | `covers` and `doesNotCover`, each a list of strings. Facts about the tests in this change, shown in the overview. Visible from the start. |
 | `notExamined[]` | What the agent did not look at or could not run. **Held back**: it opens with the other findings once every file is viewed (or on "Show all"), under "Before you sign off", beside an "Anything else?" box whose text goes into the feedback. |
-| `focus[].ref` | `"path:line"`, `"path:start-end"`, `"path"`, or `"#block-or-section-id"`. Built-in section ids: `overview`, `ask`, `key-changes`, `blast-radius` (when the change has one), `checks`, `files`. (`wrap-up` is reserved but never a ref target: it opens only after the reviewer's pass.) A custom section's id is its slugified title unless you set `id`. |
+| `focus[].ref` | `"path:line"`, `"path:start-end"`, `"path"`, or `"#block-or-section-id"`. Built-in section ids: `overview`, `background` (when there's a background or terms), `ask`, `key-changes`, `blast-radius` (when the change has one), `checks`, `files`. (`wrap-up` is reserved but never a ref target: it opens only after the reviewer's pass.) A custom section's id is its slugified title unless you set `id`. |
 | `sections[]` | Rendered in order between the overview and key changes. Each needs a `title` and `blocks`; `id` and `intro` are optional. |
 | `keyChanges[]` | `diff` blocks (the `type` can be omitted) or `code` blocks. Rendered as tabs, in order. |
 | `concerns[]` | `title` (required), `why` (one line, markdown), and `files` in reading order: interfaces and schema before the code that uses them, each test right after the code it tests. Every file belongs to at most one concern. Concerns drive the All files section, the sidebar, and the footprint bar, and each gets an id `c-<slugified title>` usable in focus refs. Files in no concern are listed under "Other changes" (the build warns). Leave mechanical and generated files out; they get their own groups. |
@@ -118,6 +122,8 @@ held back until the reviewer asks to see them.
 - `line` uses the NEW-file number by default. Set `"side": "old"` for removed
   lines and use the OLD number.
 - `to` makes the note cover a span; it's drawn after the last line.
+- `title` is optional: a short statement of the note's point, shown above the
+  text. Use it when the text runs past one sentence.
 - `kind` is one of `note`, `risk`, `question`, `decision`, or `praise`.
   `risk`, `question`, and `praise` are the agent's findings: the page holds them
   back (with the file's risk dot) until the reviewer has viewed that file or
@@ -314,4 +320,9 @@ plan tiers, and platform support.
 - A `focus.ref` that points nowhere: an unknown path or `#id`, or a line past
   the end of the file.
 - A `title` over 70 characters (warning).
+- Readability (warnings, at most eight shown at a time): a sentence over 28
+  words, more than three code names in one sentence, an abbreviation that isn't
+  common, isn't spelled out in parentheses, and isn't in `terms`, a `brief`
+  over three sentences, a `background` over five, and a `terms` entry the prose
+  never uses.
 - Screenshots that are missing or too large.

@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const RUNTIME = process.versions.bun ? "bun" : "node";
 const SKILL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ASSETS = path.join(SKILL_DIR, "assets");
@@ -1527,6 +1527,8 @@ function skeleton(diff) {
   return {
     title: diff.pr?.title || "",
     brief: "",
+    background: "",
+    terms: [],
     risk: { level: "", why: "" },
     ask: [],
     summary: [],
@@ -1552,9 +1554,9 @@ const CHANGE = new Set(["added", "removed", "modified", "renamed", "unchanged"])
 const ANNOTATION_KINDS = new Set(["note", "risk", "question", "decision", "praise"]);
 const CALLOUT_KINDS = new Set(["note", "risk", "breaking", "decision", "question", "security", "perf"]);
 const SURFACES = new Set(["browser", "desktop", "mobile", "popover", "panel", "bare"]);
-const TEXT_KEYS = new Set(["md", "html", "css", "source", "brief", "intro", "why", "summary", "note", "caption", "text"]);
+const TEXT_KEYS = new Set(["md", "html", "css", "source", "brief", "background", "intro", "why", "summary", "note", "caption", "text"]);
 // Ids the page itself uses; recap ids must not shadow them.
-const RESERVED_IDS = new Set(["top", "main", "app", "overview", "ask", "signals", "key-changes", "blast-radius", "checks", "wrap-up", "files", "hr-data", "hr-title", "hr-top-title"]);
+const RESERVED_IDS = new Set(["top", "main", "app", "overview", "background", "terms", "ask", "signals", "key-changes", "blast-radius", "checks", "wrap-up", "files", "hr-data", "hr-title", "hr-top-title"]);
 const isReservedId = (id) => RESERVED_IDS.has(id) || /^(file-|t\d+-|v-|mmd\d)/.test(id);
 const VALID_ID = /^[A-Za-z][\w-]*$/;
 // Tags the renderer strips together with everything inside them.
@@ -1567,7 +1569,7 @@ function normalizeText(node, depth = 0) {
   if (node && typeof node === "object") {
     for (const [k, v] of Object.entries(node)) {
       if (k === "example") continue;
-      if ((depth > 0 || k === "brief") && TEXT_KEYS.has(k) && Array.isArray(v) && v.every((x) => typeof x === "string")) node[k] = v.join("\n");
+      if ((depth > 0 || k === "brief" || k === "background") && TEXT_KEYS.has(k) && Array.isArray(v) && v.every((x) => typeof x === "string")) node[k] = v.join("\n");
       else node[k] = normalizeText(v, depth + 1);
     }
   }
@@ -1822,11 +1824,28 @@ function validate(recap, diff, recapDir) {
   };
 
   // Top level
-  const known = new Set(["title", "brief", "risk", "ask", "summary", "focus", "sections", "keyChanges", "questions", "checks", "tests", "notExamined", "concerns", "files", "$schema"]);
+  const known = new Set(["title", "brief", "background", "terms", "risk", "ask", "summary", "focus", "sections", "keyChanges", "questions", "checks", "tests", "notExamined", "concerns", "files", "$schema"]);
   for (const k of Object.keys(recap)) if (!known.has(k)) warn(k, "unknown top-level key (ignored)");
   if (!recap.title || !String(recap.title).trim()) err("title", "required");
   else if (recap.title.length > 70) warn("title", `${recap.title.length} chars — keep it to 70 or fewer`);
   if (!recap.brief) warn("brief", "add 1–3 sentences: what changed and why");
+  if (recap.background !== undefined && typeof recap.background !== "string") err("background", "must be a string (or an array of lines)");
+  else if (!(recap.background || "").trim() && diff.files.length > 2) warn("background", "empty — add 2–4 plain sentences on what this part of the system does today, for a reviewer who hasn't worked in it");
+  if (recap.terms !== undefined) {
+    if (!Array.isArray(recap.terms)) err("terms", 'must be an array of { "term": "…", "means": "…" }');
+    else {
+      const seen = new Set();
+      recap.terms.forEach((t, i) => {
+        if (!t || typeof t.term !== "string" || !t.term.trim() || typeof t.means !== "string" || !t.means.trim()) return err(`terms[${i}]`, 'needs a non-empty `term` and `means`');
+        // The page matches a term in plain text or as one whole code span, never across the two.
+        if (t.term.includes("`") && !/^`[^`]+`$/.test(t.term.trim())) warn(`terms[${i}].term`, `"${t.term}" mixes a code name and words — the page can't match that; write just the code name in backticks, or plain words`);
+        const k = t.term.trim().toLowerCase();
+        if (seen.has(k)) warn(`terms[${i}]`, `"${t.term}" is defined twice`);
+        seen.add(k);
+      });
+      if (recap.terms.length > 8) warn("terms", `${recap.terms.length} terms — keep the 3–8 a newcomer would trip on; explain the rest in place`);
+    }
+  }
   if (!recap.risk || !recap.risk.level) warn("risk", 'set risk.level to "low", "medium", or "high" and say why');
   else {
     if (!["low", "medium", "high"].includes(recap.risk.level)) err("risk.level", 'must be "low", "medium", or "high"');
@@ -1951,6 +1970,8 @@ function validate(recap, diff, recapDir) {
   const builtIn = new Set(["files"]);
   if ((recap.summary || []).length || (recap.focus || []).length || (recap.tests && ((recap.tests.covers || []).length || (recap.tests.doesNotCover || []).length))) builtIn.add("overview");
   if ((recap.ask || []).length) builtIn.add("ask");
+  if ((typeof recap.background === "string" && recap.background.trim()) || (Array.isArray(recap.terms) && recap.terms.length)) builtIn.add("background");
+  if (Array.isArray(recap.terms) && recap.terms.length) builtIn.add("terms");
   if ((recap.keyChanges || []).length) builtIn.add("key-changes");
   if ((diff.blast?.symbols || []).length || (diff.blast?.notes || []).length) builtIn.add("blast-radius");
   if ((recap.questions || []).length || (recap.checks?.verified || []).length || (recap.checks?.manual || []).length) builtIn.add("checks");
@@ -2004,7 +2025,105 @@ function validate(recap, diff, recapDir) {
     }
   };
 
+  if (!errors.length) warnings.push(...readability(recap));
   return { errors, warnings, referencedFiles, codeFiles, screenshots, typesUsed, finish };
+}
+
+// ───────────────────────────────────────────────────────────── readability
+//
+// A reviewer often reads the page cold, between other tasks. These checks catch the density an
+// author can't see in their own writing: long sentences, runs of code names, and abbreviations
+// nobody defined. They only warn, and the list is capped so it can't drown the other warnings.
+
+const READ_MAX_WORDS = 28;
+const READ_MAX_CODE = 3;
+const READ_MAX_SHOWN = 8;
+// Keys whose string values (or lists of strings) are prose a reviewer reads.
+const PROSE_KEYS = new Set(["title", "brief", "background", "why", "intro", "md", "summary", "note", "caption", "text", "ask", "questions", "notExamined", "covers", "doesNotCover", "manual", "verified", "means"]);
+// Abbreviations an engineer new to this repo still knows. Anything else gets spelled out or defined.
+const KNOWN_ABBR = new Set(
+  ("API URL URI HTTP HTTPS JSON SQL UI UX ID CLI CI CD PR DB CSS HTML JS TS JSX TSX OK GET POST PUT PATCH DELETE HEAD OPTIONS " +
+    "NULL TODO README UTC UTF ASCII CPU GPU RAM OS IP DNS TCP UDP SSH TLS SSL PDF PNG JPEG SVG CSV XML YAML TOML UUID SHA MD5 HMAC AES RSA " +
+    "AWS GCP AI LLM EOF IO MB KB GB TB ESM CJS NPM SDK IDE CDN SSO SAML MFA JWT CSRF XSS CORS CSP ORM RPC REST CRUD SPA SSR DOM " +
+    "TTL LRU FIFO PII SLA SLO QA E2E ENV EST PST GMT ISO RFC HTML5 WASM GC CRLF LF BOM MIME SMTP GIT " +
+    // English words written in capitals for emphasis.
+    "NOT NO DO DON ALL ANY AND OR IF ONLY NEVER MUST NONE YES BOTH EVERY BEFORE AFTER").split(" "),
+);
+
+function proseFields(node, p = "", key = "", out = []) {
+  if (typeof node === "string") {
+    if (PROSE_KEYS.has(key)) out.push({ p, text: node });
+  } else if (Array.isArray(node)) node.forEach((x, i) => proseFields(x, `${p}[${i}]`, key, out));
+  else if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node)) {
+      if (k === "html" || k === "css" || k === "source" || k === "example") continue;
+      proseFields(v, key === "files" ? `${p}["${k}"]` : p ? `${p}.${k}` : k, k, out);
+    }
+  }
+  return out;
+}
+
+// A term matches as a whole word, case-insensitively, with an optional -s, -es, -d, or -ed, and with spaces or
+// hyphens between its words ("share link" also matches "share-links"). app.js uses the same rule.
+const termPattern = (term) =>
+  `(?<![\\w-])${term.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "[\\s-]+")}(?:s|es|d|ed)?(?![\\w-])`;
+
+function sentencesOf(text) {
+  const codes = [];
+  const t = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .split("\n")
+    .filter((l) => !/^\s*\|/.test(l))
+    .join("\n")
+    .replace(/`([^`]+)`/g, (_, c) => `⟦${codes.push(c) - 1}⟧`)
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}/g, "")
+    .replace(/\b(e\.g|i\.e|vs|etc|approx|cf)\./gi, "$1");
+  const out = [];
+  for (const line of t.split(/\n+/)) {
+    for (const s of line.replace(/^\s*(?:[-*+]|\d+\.)\s+/, "").split(/(?<=[.!?])\s+(?=[^a-z\s])/)) {
+      const words = s.split(/\s+/).filter((w) => /[\p{L}\p{N}⟦]/u.test(w));
+      if (!words.length) continue;
+      const restore = (x) => x.replace(/⟦(\d+)⟧/g, (_, i) => `\`${codes[i]}\``);
+      out.push({ words: words.length, code: (s.match(/⟦\d+⟧/g) || []).length, plain: s.replace(/⟦\d+⟧/g, " "), head: restore(words.slice(0, 7).join(" ")) });
+    }
+  }
+  return out;
+}
+
+function readability(recap) {
+  const fields = proseFields(recap);
+  const terms = Array.isArray(recap.terms) ? recap.terms.filter((t) => t && typeof t.term === "string" && t.term.trim()) : [];
+  const termKeys = new Set(terms.map((t) => t.term.replace(/`/g, "").trim().toUpperCase()));
+  const all = fields.map((f) => f.text).join("\n");
+  const out = [];
+  const abbrSeen = new Map();
+  for (const f of fields) {
+    const ss = sentencesOf(f.text);
+    for (const s of ss) {
+      if (s.words > READ_MAX_WORDS) out.push(`${f.p}: ${s.words}-word sentence ("${s.head}…") — split it; one idea per sentence reads faster`);
+      else if (s.code > READ_MAX_CODE) out.push(`${f.p}: ${s.code} code names in one sentence ("${s.head}…") — say what they are in words and keep the one or two the reader will look for`);
+      for (const m of s.plain.matchAll(/(?<![\w./-])([A-Z][A-Z0-9]{1,5})s?(?![\w/-])/g)) {
+        const a = m[1];
+        if ((a.match(/[A-Z]/g) || []).length < 2 || KNOWN_ABBR.has(a) || termKeys.has(a) || abbrSeen.has(a)) continue;
+        abbrSeen.set(a, f.p);
+      }
+    }
+    if (f.p === "brief" && ss.length > 3) out.push(`brief: ${ss.length} sentences — keep it to 1–3; context belongs in \`background\``);
+    if (f.p === "background" && ss.length > 5) out.push(`background: ${ss.length} sentences — keep it to 2–4; a newcomer needs the outline, not the tour`);
+  }
+  for (const [a, p] of abbrSeen) {
+    // Defined in place: "time to live (TTL)", "TTL (time to live)", or "the PAO table (per-account overrides)".
+    if (new RegExp(`\\(${a}s?\\)|\\b${a}s?\\b[^.()\\n]{0,24}\\(`).test(all)) continue;
+    out.push(`${p}: "${a}" isn't defined — spell it out the first time ("time to live (TTL)") or add it to \`terms\``);
+  }
+  const prose = fields.filter((f) => !f.p.startsWith("terms")).map((f) => f.text).join("\n");
+  terms.forEach((t, i) => {
+    if (!new RegExp(termPattern(t.term.replace(/`/g, "")), "i").test(prose)) out.push(`terms[${i}]: "${t.term}" isn't used in the page's prose — drop it, or use it where it helps`);
+  });
+  if (out.length > READ_MAX_SHOWN) return [...out.slice(0, READ_MAX_SHOWN), `readability: ${out.length - READ_MAX_SHOWN} more like these — fix the ones above, then build again to see the rest`];
+  return out;
 }
 
 function selectHunks(f, blk) {

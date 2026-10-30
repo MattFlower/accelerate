@@ -95,6 +95,9 @@ While reading, keep a short inventory. This is your raw material:
 - **Risk:** anything that could break, leak, lose data, or surprise a user;
   anything irreversible; anything you aren't sure about.
 - **Evidence:** tests added or changed, and what you actually ran.
+- **Vocabulary:** words a reviewer new to this code wouldn't know: internal
+  names (modules, roles, flags), domain terms, and abbreviations. Note what
+  each one means as you learn it; you'll need it for `background` and `terms`.
 
 Don't re-read the whole diff after this pass. Work from your notes.
 
@@ -104,8 +107,8 @@ Don't re-read the whole diff after this pass. Work from your notes.
 block. For any UI change, also read `references/wireframes.md`. For
 architecture or flow diagrams, read `references/diagrams.md`.
 `references/example-recap.json` is a complete, strong recap of a mid-sized
-feature (UI, schema, API, permissions). Skim it once to calibrate the tone and
-density.
+feature (UI, schema, API, permissions). Read it once to calibrate the tone: plain
+words, short sentences, and project terms explained.
 
 What to write, and how, is covered in "Writing for a reviewer" below.
 
@@ -121,8 +124,11 @@ Use `build <dir> --check` to validate without writing the page while you
 iterate. The build validates `recap.json` against the real diff. Errors name
 the JSON path and the fix: an annotation on a line that isn't in the diff, a file that
 isn't in the change, an unknown block type, a bad screenshot path. Fix every
-error. Read the warnings and fix them unless you have a reason not to. The
-output is `<dir>/review.html`.
+error. Read the warnings and fix them unless you have a reason not to. That
+includes the readability warnings (long sentences, too many code names in one
+sentence, an abbreviation nobody defined, a term in `terms` that the prose never
+uses): rewrite the sentence rather than trimming a word to get under the limit.
+The output is `<dir>/review.html`.
 
 If the build says the code moved since `collect`, run `collect` again, then
 rebuild. Never hand over a stale review.
@@ -154,7 +160,7 @@ Don't paste the recap content into chat. The page is the deliverable.
 A reviewer opens the page with four questions. Answer them in this order, and
 answer each one only once:
 
-1. **What is this?** Covered by `title`, `brief`, and `summary`.
+1. **What is this?** Covered by `title`, `brief`, `background`, and `summary`.
 2. **Should I worry?** Covered by `risk` and `focus`.
 3. **What does it look like, and what contracts moved?** Covered by `sections`:
    wireframes, screenshots, data model, API, diagrams.
@@ -175,7 +181,7 @@ fixate on what it flagged and miss the rest. So the page holds back your
   `praise` annotations; `risk`, `security`, and `question` callouts; and
   `notExamined`, which opens only when every file has been viewed (or on "Show
   all").
-- **Always visible:** everything else: `title`, `brief`, `ask`, `summary`,
+- **Always visible:** everything else: `title`, `brief`, `background`, `terms`, `ask`, `summary`,
   `focus`, `tests`, sections (wireframes, diagrams, captions, API and states
   notes), `note`, `decision`, `breaking`, and `perf` callouts, `note` and
   `decision` annotations, key-change summaries, concern and file notes,
@@ -189,7 +195,46 @@ Write the visible parts **descriptively**: what changed, how it works, where to
 look. Put what you *concluded* (bugs, sharp edges, doubts) only in the held-back
 fields. A visible caption that says "choosing Never still produces a 7-day
 link" gives the finding away; "the Expires menu offers 1 day, 7 days, 30 days,
-and Never" doesn't.
+and Never" doesn't. Two more of the same kind:
+
+- `background` describes the system as it was *before* the change. It never
+  hints at what the change gets wrong.
+- A `terms` entry gives what a word is *meant* to mean ("a link that hasn't
+  been revoked and hasn't expired"). Don't define it by what buggy code
+  actually does.
+
+### Write for someone new to this code
+
+Assume the reviewer is a capable engineer who has never opened this part of the
+repo and has just switched over from other work. Dense, insider prose is the
+main reason a page like this is hard to read. For every field:
+
+- **Say what a thing does before what it's called.** Write "the server keeps only
+  a hash of the token (`token_hash`)", not "`token_hash` is SHA-256'd".
+  Backticks are for names the reader will look for in the code, not for every
+  noun.
+- **Define project words.** That means internal names (modules, roles, flags),
+  domain terms, and any abbreviation an engineer outside the team might not
+  know. Explain each one in place the first time, or put it in `terms`. Prefer
+  everyday words to insider shorthand: "turns the link off" over "soft-revokes",
+  "checks" over "gates", "looks up" over "resolves".
+- **One idea per sentence.** Aim for under 20 words. Split a sentence that
+  joins two facts with a semicolon or a dash.
+- **Two code names per sentence is plenty.** Three starts to turn a sentence
+  into a puzzle, and the build warns at four.
+- **Effect before mechanism.** Say what changes for a user or a caller, then
+  how.
+- **Full sentences, not telegraph.** "Owners only." is fine as a file note.
+  "Gate `canShare` not `canEdit`; editors 403" is not.
+
+Before and after, the same annotation:
+
+> `req.body.ttlDays ?? 7` turns an explicit `null` (the popover's *Never*) into 7.
+
+> **Title:** *Never* becomes 7 days. **Text:** `req.body.ttlDays ?? 7`
+> replaces `null` with 7, and `null` is what the popover sends for *Never*.
+
+`references/example-recap.json` is written this way. Match it.
 
 ### The fields that carry the most weight
 
@@ -198,6 +243,21 @@ and Never" doesn't.
   "Read-only share links for project boards", not "Add share link feature".
 - **`brief`**: one to three sentences in plain language that a product person
   could follow. What changed for whom, and the one mechanism that matters.
+- **`background`**: two to four plain sentences, shown under the brief as
+  "Before this change". Say what this part of the system does today and how
+  its pieces fit together: what a reviewer would need to hear from a teammate
+  before reading the diff. Describe, don't evaluate, and don't restate the
+  change. Skip it only for a change so small or so self-explanatory that it
+  needs no setup.
+- **`terms`**: three to eight words from your vocabulary notes that the page
+  uses and a newcomer would trip on, each as
+  `{ "term": "live link", "means": "A link that hasn't been revoked or expired." }`.
+  The page lists them under the background and underlines each one where
+  it's first used in a section; hovering or tapping shows the meaning. Write
+  `term` the way the prose writes it: either one code name in backticks
+  (`` "`canShare`" ``) or plain words ("live link"), never a mix like
+  `` "`beforeRetry` hook" ``. Keep `means` to one plain sentence. Don't list words every engineer knows,
+  and leave out a word the page explains where it uses it.
 - **`risk`**: `low`, `medium`, or `high`, plus one line of why. Calibrate
   honestly. A refactor with full test coverage is `low`. A new unauthenticated
   route, a data migration, or auth or billing logic is at least `medium`. If
@@ -289,6 +349,8 @@ legible.
 
   Notes and decisions explain the code and are always visible, so they mustn't
   smuggle in a verdict ("this is wrong because…" belongs in a `risk`).
+- When a note needs more than one sentence, give it a short `title` that states
+  the point ("*Never* becomes 7 days"). The text then carries the detail.
 - Use `"to"` for multi-line spans, and `"side": "old"` for a removed line,
   numbered from the OLD column of `review.txt`.
 - Line numbers come from `review.txt`. The build rejects any line that isn't in
@@ -459,6 +521,10 @@ that fails:
    in a held-back kind. Reword anything visible that gives a verdict away.
 5. **Worth the reviewer's trust?** One wrong or noisy note makes them discount
    the rest. Silence beats a weak note, and a file with no annotations is fine.
+6. **Readable cold?** Reread it as someone who has never opened this repo. Every
+   word must be everyday English, explained where it's used, or in `terms`. If
+   you'd have to read a sentence twice, rewrite it (see "Write for someone new
+   to this code").
 
 The same goes for anything you take from the blast radius: a mention is not a
 call until you've read the line.
