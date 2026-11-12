@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildCaseRepo, assertNoFuture } from './case-repo.mjs';
-import { instructionManifest } from './isolated-env.mjs';
+import { instructionManifest, changedInstructionFiles } from './isolated-env.mjs';
 
 export function verifyCase({ limitless, case: entry, scratch = tmpdir() }) {
   const result = { id: entry.id, ok: false, error: null, base: entry.base, head: entry.head,
-    snapshotBase: null, snapshotHead: null, manifest: null };
+    snapshotBase: null, snapshotHead: null, manifest: null, instructionFilesChanged: null };
   let root;
   try {
     root = mkdtempSync(join(resolve(scratch), 'qr-verify-'));
@@ -17,6 +17,7 @@ export function verifyCase({ limitless, case: entry, scratch = tmpdir() }) {
     result.snapshotHead = pins.head;
     assertNoFuture(dest, [pins.base, pins.head]);
     result.manifest = instructionManifest(dest);
+    result.instructionFilesChanged = changedInstructionFiles(dest);
     result.ok = true;
   } catch (error) {
     result.error = error.message;
@@ -50,7 +51,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     }
     const ok = results.filter(result => result.ok).length;
     console.log(`verified ${ok}/${results.length}`);
-    if (options.out) writeFileSync(options.out, `${JSON.stringify(results, null, 2)}\n`);
+    if (options.out) writeFileSync(options.out, `${JSON.stringify({ summary: { total: results.length, ok, instructionFilesChanged: results.filter(r => r.instructionFilesChanged?.length).length }, cases: results }, null, 2)}\n`);
     if (ok !== results.length) process.exitCode = 1;
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
