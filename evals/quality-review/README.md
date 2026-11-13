@@ -68,11 +68,8 @@ per-case results. Each temporary case repo is deleted after verification.
 
 ## Not yet built
 
-- Two-judge matcher port
-- Wilson CIs
 - A/A drift
 - Paired PR-clustered bootstrap
-- Volume bookkeeping
 - Stage-level scoring
 - The A5 stub skill / reviewer prompt
 
@@ -215,3 +212,77 @@ Round-2 local verification: all 67 exported cases passed. The report was written
 to `/Users/mflower/.hermes/profiles/research-integrator/workspace/exp-qr-eval/verify-all-round2.json`.
 Exactly one case is affected: `review-224`, with `M AGENTS.md`. No case repo or
 source clone was changed by verification.
+
+## Round 3: judging
+
+`judge.mjs` ports the two-judge semantic matcher from limitless `e42003a`
+`src/evals/judge.ts:22–169,200–275`. Prompt bytes and prompt-version hashing,
+G1/F1 ids, strict validation, stable confidence-ordered de-duplication, required
+gold selection, and caught/contested/underRated/agreement rules follow that source.
+A caught gold requires both judges to map it to a blocker or major finding
+(`src/pipeline/review.ts:188–189`). Agreement means both mapped or both null,
+even when they map to different findings. Missing judgments exclude that trial's
+golds from the denominator and increment `unjudged`; inspect this count.
+Wilson intervals are the verbatim JS port of `src/evals/stats.ts:24–34`.
+
+```sh
+node evals/quality-review/judge-trials.mjs \
+  --trials /path/to/trials --judge codex:MODEL:high --judge claude:MODEL:high \
+  --cache /path/to/judgment-cache --out /path/to/report.json --dry-run
+```
+
+Exactly two judge flags are required. Omitted effort is recorded as `default`.
+The `default` effort stays in target/cache records but emits no effort flag for either runtime.
+Repeatable `--pass-auth NAME` on both CLIs validates auth names and uses their values consistently for redacted judging, cache lookup, metrics, and sampling.
+Dry-run prints uncached unique request count, maximum attempts (two per request),
+argv and environment keys only, then writes the metrics report from existing
+cache entries. Actual uncached launches require `--confirm-spend`. Cache-only
+scoring needs no spend flag. Failed or malformed responses retry once; successful
+judgments never retry. Cache corruption is an error, never permission to re-call.
+Each attempt uses an empty scratch cwd, isolated config directories, stdin prompt,
+no-tools/private-session flags, and a ten-minute timeout. No model calls were
+made during development; tests use fake binaries only.
+
+The report includes clean must-fix rate and error count, mean total and blocking
+findings per successful trial, primary recall with all cases, and secondary
+`withoutReview224` recall (pre-registered because review-224 edits AGENTS.md).
+Errors never count as clean passes. These are aggregate trial metrics; compare
+systems using separately selected trial directories.
+
+```sh
+node evals/quality-review/validation-sample.mjs \
+  --trials /path/to/trials --judge codex:MODEL:high --judge claude:MODEL:high \
+  --cache /path/to/judgment-cache --out /path/to/hand-check --n 50 --seed 1
+```
+
+This writes `.json` and `.csv` with a blank human column for Matt's hand check
+(target >=90% agreement). Sampling is deterministic, without replacement: half
+both-mapped, quarter contested, remainder both-null. For distinct mapped findings,
+each pair is eligible. Both-null selects the closest finding by same file then
+line distance; no findings leaves the finding columns empty. JSON records seed,
+quotas and available counts; undersupplied strata produce fewer rows, without
+silently filling from another stratum. Sampling never changes scoring.
+
+Deliberate divergences from limitless:
+
+- Target identity is `{runtime, model, effort}` instead of `parseTarget` and the
+  router's provider/model identity. This also changes cache keys.
+- `redact(text, secrets)` replaces all occurrences of strings at least eight
+  characters long. Secrets are values of explicitly passed auth env vars,
+  rather than limitless's credential registry. Direct `runJudge` callers may
+  opt into `passAuth`; this CLI passes none, matching round 2.
+- A file cache stores strict normalized matches, redacted reasons, judge target,
+  and cost when reported, instead of the SQLite store. No provider cost estimate
+  is invented; Claude's reported `total_cost_usd` is retained.
+- Only first-review, non-panel blocking rules apply; there are no panel rules.
+- Local CLI invocation and the existing transcript parser replace the harness
+  router, structured-attempt routing, and model-origin eligibility checks.
+  Codex uses the pinned noTools branch (not the tool-enabled read-only flags).
+- There is no provider concurrency/rate tracking, quota accounting, budget cap,
+  abort-signal router integration, or live telemetry. Calls run sequentially.
+- Round-2 findings-only records replace StoredReview wrappers; strict finding
+  validation remains in effect. The added clean/volume/exclusion metrics and
+  hand-check sampling are secondary bookkeeping outside judge.ts.
+
+Any change to JUDGE_RULE, TEMPLATE, matching, or the caught rule is a scoring
+change that needs Matt's approval.
