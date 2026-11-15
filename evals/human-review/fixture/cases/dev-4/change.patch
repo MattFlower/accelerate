@@ -1,0 +1,470 @@
+diff --git a/README.md b/README.md
+index c800baf..e09d553 100644
+--- a/README.md
++++ b/README.md
+@@ -25,6 +25,6 @@ Reporting provides a bounded CSV iterator without constructing a full export in
+ memory. Capabilities authenticate internal reporting adapters; secrets come from
+ the host process. Neither the core nor its tests opens a network listener.
+
+-Source areas: orders contains lifecycle operations; storage owns row isolation;
++Source areas: purchases contains lifecycle operations; persistence owns row isolation;
+ http translates request values; retry owns due-work scheduling; reporting owns
+ CSV output; security owns signed capabilities; config validates environment input.
+diff --git a/src/app.mjs b/src/app.mjs
+index 2db82ca..3a0d23a 100644
+--- a/src/app.mjs
++++ b/src/app.mjs
+@@ -1,5 +1,5 @@
+-import { OrderStore } from './storage/orders.mjs';
+-import { OrderService } from './orders/service.mjs';
++import { OrderStore } from './persistence/orders.mjs';
++import { OrderService } from './purchases/service.mjs';
+ import { orderHandlers } from './http/orders.mjs';
+ import { Scheduler } from './retry/scheduler.mjs';
+ import { loadSettings } from './config/settings.mjs';
+diff --git a/src/http/orders.mjs b/src/http/orders.mjs
+index 6ecdb5c..393b878 100644
+--- a/src/http/orders.mjs
++++ b/src/http/orders.mjs
+@@ -1,5 +1,5 @@
+ import { json, errorResponse, pagination } from './response.mjs';
+-import { publicOrder } from '../orders/model.mjs';
++import { publicOrder } from '../purchases/model.mjs';
+
+ export function orderHandlers(service) {
+   return {
+diff --git a/src/http/response.mjs b/src/http/response.mjs
+index bc4116b..aa2788a 100644
+--- a/src/http/response.mjs
++++ b/src/http/response.mjs
+@@ -14,7 +14,7 @@ export function errorResponse(error) {
+ }
+
+ export function pagination(query = {}) {
+-  const limit = Number(query.limit ?? 50);
++  const limit = Number(query.limit ?? 25);
+   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+     throw new Error('limit must be between 1 and 100');
+   }
+diff --git a/src/orders/model.mjs b/src/orders/model.mjs
+deleted file mode 100644
+index 17ec29a..0000000
+--- a/src/orders/model.mjs
++++ /dev/null
+@@ -1,51 +0,0 @@
+-/** Order records use integer cents throughout the service. */
+-export function createOrder(input, id, now) {
+-  if (!input.customer || typeof input.customer !== 'string') {
+-    throw new Error('customer is required');
+-  }
+-  if (!Array.isArray(input.items) || input.items.length === 0) {
+-    throw new Error('items are required');
+-  }
+-  const items = input.items.map(normalizeItem);
+-  return {
+-    id,
+-    customer: input.customer,
+-    items,
+-    total: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+-    status: 'pending',
+-    createdAt: now,
+-    updatedAt: now,
+-    version: 1,
+-  };
+-}
+-
+-function normalizeItem(item) {
+-  if (!item.sku || typeof item.sku !== 'string') throw new Error('sku is required');
+-  if (!Number.isSafeInteger(item.price) || item.price < 0) {
+-    throw new Error('price must be nonnegative integer cents');
+-  }
+-  if (!Number.isSafeInteger(item.quantity) || item.quantity < 1) {
+-    throw new Error('quantity must be a positive integer');
+-  }
+-  if (!Number.isSafeInteger(item.price * item.quantity)) {
+-    throw new Error('line total exceeds supported range');
+-  }
+-  return { sku: item.sku, price: item.price, quantity: item.quantity };
+-}
+-
+-export function transition(order, status, now) {
+-  const allowed = {
+-    pending: ['paid', 'cancelled'],
+-    paid: ['shipped'],
+-    shipped: [],
+-    cancelled: [],
+-  };
+-  if (!allowed[order.status]?.includes(status)) {
+-    throw new Error(`cannot move ${order.status} to ${status}`);
+-  }
+-  return { ...order, status, updatedAt: now, version: order.version + 1 };
+-}
+-
+-export function publicOrder(order) {
+-  return structuredClone(order);
+-}
+diff --git a/src/orders/service.mjs b/src/orders/service.mjs
+deleted file mode 100644
+index 8a26505..0000000
+--- a/src/orders/service.mjs
++++ /dev/null
+@@ -1,35 +0,0 @@
+-import { randomUUID } from 'node:crypto';
+-import { createOrder, transition } from './model.mjs';
+-
+-/** Application operations shared by HTTP handlers and background work. */
+-export class OrderService {
+-  constructor(store, { clock = Date.now, nextId = randomUUID } = {}) {
+-    this.store = store;
+-    this.clock = clock;
+-    this.nextId = nextId;
+-  }
+-
+-  submit(input, token) {
+-    if (token) {
+-      const existing = this.store.findByToken(token);
+-      if (existing) return { order: existing, created: false };
+-    }
+-    const order = createOrder(input, this.nextId(), this.clock());
+-    return { order: this.store.insert(order, token), created: true };
+-  }
+-
+-  get(id) {
+-    return this.store.find(id);
+-  }
+-
+-  changeStatus(id, status) {
+-    const current = this.store.find(id);
+-    if (!current) throw new Error('order not found');
+-    const updated = transition(current, status, this.clock());
+-    return this.store.save(updated, current.version);
+-  }
+-
+-  list(options) {
+-    return this.store.list(options);
+-  }
+-}
+diff --git a/src/persistence/cache.mjs b/src/persistence/cache.mjs
+new file mode 100644
+index 0000000..8844284
+--- /dev/null
++++ b/src/persistence/cache.mjs
+@@ -0,0 +1,42 @@
++/** Small bounded read cache. Values are owned by the cache. */
++export class ReadCache {
++  constructor(capacity = 128) {
++    if (!Number.isInteger(capacity) || capacity < 1) throw new Error('invalid capacity');
++    this.capacity = capacity;
++    this.entries = new Map();
++    this.hits = 0;
++    this.misses = 0;
++  }
++
++  get(id) {
++    const value = this.entries.get(id);
++    if (value === undefined) {
++      this.misses += 1;
++      return undefined;
++    }
++    this.hits += 1;
++    this.entries.delete(id);
++    this.entries.set(id, value);
++    return structuredClone(value);
++  }
++
++  set(id, value) {
++    this.entries.delete(id);
++    this.entries.set(id, structuredClone(value));
++    while (this.entries.size > this.capacity) {
++      this.entries.delete(this.entries.keys().next().value);
++    }
++  }
++
++  delete(id) {
++    return this.entries.delete(id);
++  }
++
++  clear() {
++    this.entries.clear();
++  }
++
++  stats() {
++    return { size: this.entries.size, hits: this.hits, misses: this.misses };
++  }
++}
+diff --git a/src/persistence/orders.mjs b/src/persistence/orders.mjs
+new file mode 100644
+index 0000000..a0b0406
+--- /dev/null
++++ b/src/persistence/orders.mjs
+@@ -0,0 +1,52 @@
++import { ReadCache } from './cache.mjs';
++
++/** Repository boundary: callers never receive a stored object by reference. */
++export class OrderStore {
++  constructor({ capacity = 128 } = {}) {
++    this.rows = new Map();
++    this.tokens = new Map();
++    this.cache = new ReadCache(capacity);
++  }
++
++  find(id) {
++    const cached = this.cache.get(id);
++    if (cached !== undefined) return cached;
++    const row = this.rows.get(id);
++    if (!row) return undefined;
++    this.cache.set(id, row);
++    return structuredClone(row);
++  }
++
++  insert(order, token) {
++    if (this.rows.has(order.id)) throw new Error('duplicate order');
++    this.rows.set(order.id, structuredClone(order));
++    if (token) this.tokens.set(token, order.id);
++    return this.find(order.id);
++  }
++
++  findByToken(token) {
++    const id = this.tokens.get(token);
++    return id ? this.find(id) : undefined;
++  }
++
++  save(order, expectedVersion) {
++    const current = this.rows.get(order.id);
++    if (!current) throw new Error('order not found');
++    if (current.version !== expectedVersion) throw new Error('version conflict');
++    this.rows.set(order.id, structuredClone(order));
++    this.cache.delete(order.id);
++    return this.find(order.id);
++  }
++
++  list({ after = '', limit = 50 } = {}) {
++    return [...this.rows.values()]
++      .filter(row => row.id > after)
++      .sort((a, b) => a.id.localeCompare(b.id))
++      .slice(0, limit)
++      .map(row => structuredClone(row));
++  }
++
++  count() {
++    return this.rows.size;
++  }
++}
+diff --git a/src/purchases/model.mjs b/src/purchases/model.mjs
+new file mode 100644
+index 0000000..17ec29a
+--- /dev/null
++++ b/src/purchases/model.mjs
+@@ -0,0 +1,51 @@
++/** Order records use integer cents throughout the service. */
++export function createOrder(input, id, now) {
++  if (!input.customer || typeof input.customer !== 'string') {
++    throw new Error('customer is required');
++  }
++  if (!Array.isArray(input.items) || input.items.length === 0) {
++    throw new Error('items are required');
++  }
++  const items = input.items.map(normalizeItem);
++  return {
++    id,
++    customer: input.customer,
++    items,
++    total: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
++    status: 'pending',
++    createdAt: now,
++    updatedAt: now,
++    version: 1,
++  };
++}
++
++function normalizeItem(item) {
++  if (!item.sku || typeof item.sku !== 'string') throw new Error('sku is required');
++  if (!Number.isSafeInteger(item.price) || item.price < 0) {
++    throw new Error('price must be nonnegative integer cents');
++  }
++  if (!Number.isSafeInteger(item.quantity) || item.quantity < 1) {
++    throw new Error('quantity must be a positive integer');
++  }
++  if (!Number.isSafeInteger(item.price * item.quantity)) {
++    throw new Error('line total exceeds supported range');
++  }
++  return { sku: item.sku, price: item.price, quantity: item.quantity };
++}
++
++export function transition(order, status, now) {
++  const allowed = {
++    pending: ['paid', 'cancelled'],
++    paid: ['shipped'],
++    shipped: [],
++    cancelled: [],
++  };
++  if (!allowed[order.status]?.includes(status)) {
++    throw new Error(`cannot move ${order.status} to ${status}`);
++  }
++  return { ...order, status, updatedAt: now, version: order.version + 1 };
++}
++
++export function publicOrder(order) {
++  return structuredClone(order);
++}
+diff --git a/src/purchases/service.mjs b/src/purchases/service.mjs
+new file mode 100644
+index 0000000..8a26505
+--- /dev/null
++++ b/src/purchases/service.mjs
+@@ -0,0 +1,35 @@
++import { randomUUID } from 'node:crypto';
++import { createOrder, transition } from './model.mjs';
++
++/** Application operations shared by HTTP handlers and background work. */
++export class OrderService {
++  constructor(store, { clock = Date.now, nextId = randomUUID } = {}) {
++    this.store = store;
++    this.clock = clock;
++    this.nextId = nextId;
++  }
++
++  submit(input, token) {
++    if (token) {
++      const existing = this.store.findByToken(token);
++      if (existing) return { order: existing, created: false };
++    }
++    const order = createOrder(input, this.nextId(), this.clock());
++    return { order: this.store.insert(order, token), created: true };
++  }
++
++  get(id) {
++    return this.store.find(id);
++  }
++
++  changeStatus(id, status) {
++    const current = this.store.find(id);
++    if (!current) throw new Error('order not found');
++    const updated = transition(current, status, this.clock());
++    return this.store.save(updated, current.version);
++  }
++
++  list(options) {
++    return this.store.list(options);
++  }
++}
+diff --git a/src/storage/cache.mjs b/src/storage/cache.mjs
+deleted file mode 100644
+index 8844284..0000000
+--- a/src/storage/cache.mjs
++++ /dev/null
+@@ -1,42 +0,0 @@
+-/** Small bounded read cache. Values are owned by the cache. */
+-export class ReadCache {
+-  constructor(capacity = 128) {
+-    if (!Number.isInteger(capacity) || capacity < 1) throw new Error('invalid capacity');
+-    this.capacity = capacity;
+-    this.entries = new Map();
+-    this.hits = 0;
+-    this.misses = 0;
+-  }
+-
+-  get(id) {
+-    const value = this.entries.get(id);
+-    if (value === undefined) {
+-      this.misses += 1;
+-      return undefined;
+-    }
+-    this.hits += 1;
+-    this.entries.delete(id);
+-    this.entries.set(id, value);
+-    return structuredClone(value);
+-  }
+-
+-  set(id, value) {
+-    this.entries.delete(id);
+-    this.entries.set(id, structuredClone(value));
+-    while (this.entries.size > this.capacity) {
+-      this.entries.delete(this.entries.keys().next().value);
+-    }
+-  }
+-
+-  delete(id) {
+-    return this.entries.delete(id);
+-  }
+-
+-  clear() {
+-    this.entries.clear();
+-  }
+-
+-  stats() {
+-    return { size: this.entries.size, hits: this.hits, misses: this.misses };
+-  }
+-}
+diff --git a/src/storage/orders.mjs b/src/storage/orders.mjs
+deleted file mode 100644
+index a0b0406..0000000
+--- a/src/storage/orders.mjs
++++ /dev/null
+@@ -1,52 +0,0 @@
+-import { ReadCache } from './cache.mjs';
+-
+-/** Repository boundary: callers never receive a stored object by reference. */
+-export class OrderStore {
+-  constructor({ capacity = 128 } = {}) {
+-    this.rows = new Map();
+-    this.tokens = new Map();
+-    this.cache = new ReadCache(capacity);
+-  }
+-
+-  find(id) {
+-    const cached = this.cache.get(id);
+-    if (cached !== undefined) return cached;
+-    const row = this.rows.get(id);
+-    if (!row) return undefined;
+-    this.cache.set(id, row);
+-    return structuredClone(row);
+-  }
+-
+-  insert(order, token) {
+-    if (this.rows.has(order.id)) throw new Error('duplicate order');
+-    this.rows.set(order.id, structuredClone(order));
+-    if (token) this.tokens.set(token, order.id);
+-    return this.find(order.id);
+-  }
+-
+-  findByToken(token) {
+-    const id = this.tokens.get(token);
+-    return id ? this.find(id) : undefined;
+-  }
+-
+-  save(order, expectedVersion) {
+-    const current = this.rows.get(order.id);
+-    if (!current) throw new Error('order not found');
+-    if (current.version !== expectedVersion) throw new Error('version conflict');
+-    this.rows.set(order.id, structuredClone(order));
+-    this.cache.delete(order.id);
+-    return this.find(order.id);
+-  }
+-
+-  list({ after = '', limit = 50 } = {}) {
+-    return [...this.rows.values()]
+-      .filter(row => row.id > after)
+-      .sort((a, b) => a.id.localeCompare(b.id))
+-      .slice(0, limit)
+-      .map(row => structuredClone(row));
+-  }
+-
+-  count() {
+-    return this.rows.size;
+-  }
+-}
+diff --git a/test/support.test.mjs b/test/support.test.mjs
+index 34e2ff8..3e404d1 100644
+--- a/test/support.test.mjs
++++ b/test/support.test.mjs
+@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
+ import { signCapability, readCapability, permits } from '../src/security/access.mjs';
+ import { exportOrders, summarizeOrders } from '../src/reporting/export.mjs';
+ import { loadSettings } from '../src/config/settings.mjs';
+-import { ReadCache } from '../src/storage/cache.mjs';
++import { ReadCache } from '../src/persistence/cache.mjs';
+
+ test('capabilities expire at their deadline', () => {
+   const token = signCapability({ scopes: ['reports'], expiresAt: 100 }, 'secret');
+

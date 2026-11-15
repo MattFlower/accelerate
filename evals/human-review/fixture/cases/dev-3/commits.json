@@ -1,0 +1,6 @@
+[
+  {
+    "message": "Configure delivery retry policies per operation\n\nDifferent adapters need different recovery budgets. Resolve immutable per-operation overrides when constructing the scheduler and retain the selected policy with each job. Default to linear delays to reduce recovery latency; exponential remains available to reduce repeated traffic during prolonged outages.",
+    "patch_file": "change.patch"
+  }
+]

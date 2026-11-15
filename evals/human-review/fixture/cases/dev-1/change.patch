@@ -1,0 +1,150 @@
+diff --git a/src/orders/service.mjs b/src/orders/service.mjs
+index 8a26505..e6dda32 100644
+--- a/src/orders/service.mjs
++++ b/src/orders/service.mjs
+@@ -22,6 +22,14 @@ export class OrderService {
+     return this.store.find(id);
+   }
+ 
++  getMany(ids) {
++    return this.store.findMany(ids);
++  }
++
++  readMetrics(options) {
++    return this.store.readMetrics(options);
++  }
++
+   changeStatus(id, status) {
+     const current = this.store.find(id);
+     if (!current) throw new Error('order not found');
+diff --git a/src/storage/cache.mjs b/src/storage/cache.mjs
+index 8844284..691ebcb 100644
+--- a/src/storage/cache.mjs
++++ b/src/storage/cache.mjs
+@@ -6,6 +6,8 @@ export class ReadCache {
+     this.entries = new Map();
+     this.hits = 0;
+     this.misses = 0;
++    this.evictions = 0;
++    this.writes = 0;
+   }
+ 
+   get(id) {
+@@ -17,14 +19,17 @@ export class ReadCache {
+     this.hits += 1;
+     this.entries.delete(id);
+     this.entries.set(id, value);
+-    return structuredClone(value);
++    // Read hits avoid allocating another object.
++    return value;
+   }
+ 
+   set(id, value) {
++    this.writes += 1;
+     this.entries.delete(id);
+     this.entries.set(id, structuredClone(value));
+     while (this.entries.size > this.capacity) {
+       this.entries.delete(this.entries.keys().next().value);
++      this.evictions += 1;
+     }
+   }
+ 
+@@ -36,7 +41,19 @@ export class ReadCache {
+     this.entries.clear();
+   }
+ 
++  resetStats() {
++    this.hits = 0;
++    this.misses = 0;
++    this.writes = 0;
++    this.evictions = 0;
++  }
++
+   stats() {
+-    return { size: this.entries.size, hits: this.hits, misses: this.misses };
++    const reads = this.hits + this.misses;
++    return {
++      size: this.entries.size, hits: this.hits, misses: this.misses,
++      writes: this.writes, evictions: this.evictions,
++      hitRate: reads === 0 ? 0 : this.hits / reads,
++    };
+   }
+ }
+diff --git a/src/storage/orders.mjs b/src/storage/orders.mjs
+index a0b0406..5217755 100644
+--- a/src/storage/orders.mjs
++++ b/src/storage/orders.mjs
+@@ -17,6 +17,19 @@ export class OrderStore {
+     return structuredClone(row);
+   }
+ 
++  findMany(ids) {
++    if (!Array.isArray(ids) || ids.length > 100) throw new Error('invalid order batch');
++    if (ids.some(id => typeof id !== 'string' || !id)) throw new Error('invalid order id');
++    // Preserve input positions, including duplicates and missing rows.
++    return ids.map(id => this.find(id));
++  }
++
++  readMetrics({ reset = false } = {}) {
++    const metrics = this.cache.stats();
++    if (reset) this.cache.resetStats();
++    return metrics;
++  }
++
+   insert(order, token) {
+     if (this.rows.has(order.id)) throw new Error('duplicate order');
+     this.rows.set(order.id, structuredClone(order));
+diff --git a/test/bulk.test.mjs b/test/bulk.test.mjs
+new file mode 100644
+index 0000000..0d10d61
+--- /dev/null
++++ b/test/bulk.test.mjs
+@@ -0,0 +1,48 @@
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++import { OrderStore } from '../src/storage/orders.mjs';
++import { OrderService } from '../src/orders/service.mjs';
++
++function setup() {
++  const store = new OrderStore({ capacity: 2 });
++  store.insert({ id: 'a', total: 10 });
++  store.insert({ id: 'b', total: 20 });
++  store.readMetrics({ reset: true });
++  return new OrderService(store);
++}
++
++test('batch reads retain order, duplicates and missing positions', () => {
++  const service = setup();
++  assert.deepEqual(service.getMany(['b', 'missing', 'a', 'b']).map(row => row?.id),
++    ['b', undefined, 'a', 'b']);
++  assert.deepEqual(service.getMany([]), []);
++  assert.equal(service.readMetrics().hits, 3);
++  assert.equal(service.readMetrics().misses, 1);
++});
++
++test('batch validation happens before any reads', () => {
++  const service = setup();
++  for (const ids of [null, ['a', 2], Array(101).fill('a')]) {
++    assert.throws(() => service.getMany(ids));
++  }
++  assert.equal(service.readMetrics().hits, 0);
++});
++
++test('metrics reset leaves cache contents warm', () => {
++  const service = setup();
++  service.getMany(['a', 'b']);
++  const before = service.readMetrics({ reset: true });
++  assert.equal(before.hitRate, 1);
++  assert.equal(before.size, 2);
++  assert.equal(service.readMetrics().hitRate, 0);
++  service.get('a');
++  assert.equal(service.readMetrics().hits, 1);
++});
++
++test('evictions count capacity pressure rather than replacements', () => {
++  const service = setup();
++  service.store.cache.set('a', { id: 'a' });
++  service.store.cache.set('c', { id: 'c' });
++  assert.equal(service.readMetrics().writes, 2);
++  assert.equal(service.readMetrics().evictions, 1);
++});

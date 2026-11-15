@@ -1,0 +1,119 @@
+{
+  "case_id": "dev-4",
+  "split": "dev",
+  "kind": "mechanical-heavy",
+  "branch": "refactor/package-layout",
+  "summary_for_maintainers": "Package moves dominate the diff; the HTTP page default alone changes behavior.",
+  "points": [
+    {
+      "id": "dev-4.p1",
+      "category": "mechanical",
+      "statement": "Lifecycle modules move from orders to purchases without logic changes.",
+      "covered_if": "Identifies model and service as content-preserving moves.",
+      "partial_if": "Mentions a package rename.",
+      "evidence": [
+        {
+          "ref": "src/purchases/model.mjs:2",
+          "side": "head"
+        },
+        {
+          "ref": "src/purchases/service.mjs:5",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-4.p2",
+      "category": "mechanical",
+      "statement": "Storage modules move from storage to persistence without logic changes.",
+      "covered_if": "Identifies cache and repository as content-preserving moves.",
+      "partial_if": "Mentions storage rename.",
+      "evidence": [
+        {
+          "ref": "src/persistence/cache.mjs:2",
+          "side": "head"
+        },
+        {
+          "ref": "src/persistence/orders.mjs:4",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-4.p3",
+      "category": "why",
+      "statement": "Import paths follow the new package locations.",
+      "covered_if": "Explains caller edits maintain module resolution after moves.",
+      "partial_if": "Mentions changed imports.",
+      "evidence": [
+        {
+          "ref": "commit:1",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-4.p4",
+      "category": "behavior",
+      "statement": "HTTP list requests without a limit now default to 25 orders.",
+      "covered_if": "Separates the default reduction from the mechanical moves.",
+      "partial_if": "Mentions pagination change without the new value.",
+      "evidence": [
+        {
+          "ref": "src/http/response.mjs:25",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-4.p5",
+      "category": "invariant",
+      "statement": "Explicit HTTP limits still accept integers from 1 through 100.",
+      "covered_if": "States the accepted range is unchanged.",
+      "partial_if": "Mentions limit validation.",
+      "evidence": [
+        {
+          "ref": "src/http/response.mjs:26",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-4.p6",
+      "category": "behavior",
+      "statement": "Direct repository listing still defaults to 50 orders.",
+      "covered_if": "Distinguishes repository default from HTTP default.",
+      "partial_if": "Mentions different defaults.",
+      "evidence": [
+        {
+          "ref": "src/persistence/orders.mjs:41",
+          "side": "head"
+        }
+      ]
+    }
+  ],
+  "false_claim_traps": [
+    {
+      "id": "dev-4.t1",
+      "statement": "Every edit is mechanical.",
+      "why_false": "The HTTP default changes from 50 to 25.",
+      "evidence": [
+        {
+          "ref": "src/http/response.mjs:25",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-4.t2",
+      "statement": "The exported OrderService class was renamed.",
+      "why_false": "Its name stays OrderService in the new package.",
+      "evidence": [
+        {
+          "ref": "src/purchases/service.mjs:5",
+          "side": "head"
+        }
+      ]
+    }
+  ]
+}

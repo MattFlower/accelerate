@@ -1,0 +1,6 @@
+[
+  {
+    "message": "Bound replay-token lifetime and validate intake identifiers\n\nLong-running intake workers should not retain replay identities forever. Use a fixed deadline without extending it on replay, and provide explicit pruning for idle entries. Normalize surrounding whitespace and reject oversized or control-bearing identifiers before creating orders.",
+    "patch_file": "change.patch"
+  }
+]

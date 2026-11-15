@@ -1,0 +1,182 @@
+{
+  "case_id": "dev-3",
+  "split": "dev",
+  "kind": "mostly-clean",
+  "branch": "feature/linear-retries",
+  "summary_for_maintainers": "Per-operation retry policy selection with a genuine recovery-latency versus outage-traffic trade-off; no planted defect.",
+  "points": [
+    {
+      "id": "dev-3.p1",
+      "category": "why",
+      "statement": "Per-operation retry budgets accommodate adapters with different recovery needs.",
+      "covered_if": "Connects policy selection to adapter-specific recovery budgets.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "commit:1",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-3.p2",
+      "category": "behavior",
+      "statement": "The default delay is linear: the third interval is 300ms instead of 400ms at a 100ms base.",
+      "covered_if": "Provides the before/after numbers and linear growth.",
+      "partial_if": "Names linear only.",
+      "evidence": [
+        {
+          "ref": "src/retry/policy.mjs:4",
+          "side": "head"
+        },
+        {
+          "ref": "src/retry/policy.mjs:4",
+          "side": "base"
+        }
+      ]
+    },
+    {
+      "id": "dev-3.p3",
+      "category": "behavior",
+      "statement": "Operation overrides inherit unspecified policy defaults.",
+      "covered_if": "Explains partial overrides retain unspecified settings.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/retry/policy.mjs:32",
+          "side": "head"
+        },
+        {
+          "ref": "src/retry/policy.mjs:36",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-3.p4",
+      "category": "behavior",
+      "statement": "Enqueuing an unknown operation throws an error.",
+      "covered_if": "Explains unknown operation names are rejected.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/retry/scheduler.mjs:15",
+          "side": "head"
+        },
+        {
+          "ref": "src/retry/scheduler.mjs:16",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-3.p5",
+      "category": "invariant",
+      "statement": "Caller edits cannot change resolved operation policies.",
+      "covered_if": "Explains policies are isolated from later caller mutations.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/retry/policy.mjs:27",
+          "side": "head"
+        },
+        {
+          "ref": "src/retry/scheduler.mjs:7",
+          "side": "head"
+        },
+        {
+          "ref": "src/retry/scheduler.mjs:18",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-3.p6",
+      "category": "behavior",
+      "statement": "Each job uses its selected attempt budget.",
+      "covered_if": "Explains maximum attempts come from job.policy.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/retry/scheduler.mjs:31",
+          "side": "head"
+        },
+        {
+          "ref": "src/retry/scheduler.mjs:32",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-3.p7",
+      "category": "behavior",
+      "statement": "Exponential delays remain available as an explicit strategy.",
+      "covered_if": "Identifies exponential as an opt-in alternative.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/retry/policy.mjs:4",
+          "side": "head"
+        },
+        {
+          "ref": "src/retry/policy.mjs:5",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-3.p8",
+      "category": "behavior",
+      "statement": "Linear delays increase retry traffic during prolonged outages.",
+      "covered_if": "Explains the outage-traffic cost of shorter waits.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "README.md:24",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-3.p9",
+      "category": "behavior",
+      "statement": "Permanent errors remain ineligible for retry.",
+      "covered_if": "Explains only transient errors qualify.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/retry/policy.mjs:10",
+          "side": "head"
+        },
+        {
+          "ref": "README.md:29",
+          "side": "head"
+        }
+      ]
+    }
+  ],
+  "false_claim_traps": [
+    {
+      "id": "dev-3.t1",
+      "statement": "The new default uses random jitter.",
+      "why_false": "Both delay strategies are deterministic.",
+      "evidence": [
+        {
+          "ref": "src/retry/policy.mjs:4",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-3.t2",
+      "statement": "All queued operations share the default attempt limit.",
+      "why_false": "Scheduling uses job.policy.maxAttempts.",
+      "evidence": [
+        {
+          "ref": "src/retry/scheduler.mjs:31",
+          "side": "head"
+        }
+      ]
+    }
+  ]
+}

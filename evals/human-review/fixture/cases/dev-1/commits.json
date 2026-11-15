@@ -1,0 +1,6 @@
+[
+  {
+    "message": "Add batch order reads and cache telemetry\n\nDashboard refreshes fetch many known order IDs at once. Preserve positions so callers can join results to their requests, and expose resettable counters to measure cache pressure. Avoid clone allocations on warm reads to keep the batch path inexpensive.",
+    "patch_file": "change.patch"
+  }
+]

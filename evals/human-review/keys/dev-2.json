@@ -1,0 +1,166 @@
+{
+  "case_id": "dev-2",
+  "split": "dev",
+  "kind": "planted-defect",
+  "branch": "feature/token-normalization",
+  "summary_for_maintainers": "The base HTTP mapper recognizes the pre-existing client-error messages, with a 500 fallback. The feature adds token validation without updating this unchanged dependency. Private reproduction (run then deleted): createApp with incrementing IDs; handlers.create with a valid order body and a 129-character idempotency-token returns {status:500, body:{error:\"request failed\"}}, with store.count() === 0; invalid quantity still returns 400. A client input error masquerades as a retryable server failure, inviting repeated requests. Existing plus added fixture tests pass. Keep this witness outside fixture tests.",
+  "points": [
+    {
+      "id": "dev-2.p1",
+      "category": "why",
+      "statement": "Fixed token expiry bounds replay-identity retention in long-running workers.",
+      "covered_if": "Connects expiry to preventing indefinite retention.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "commit:1",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-2.p2",
+      "category": "behavior",
+      "statement": "Token validation runs before order creation.",
+      "covered_if": "Identifies validation before persistence.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/orders/service.mjs:16",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-2.p3",
+      "category": "invariant",
+      "statement": "Invalid intake data must receive an HTTP client-error response.",
+      "covered_if": "Explains client mistakes belong in 4xx responses.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/http/response.mjs:13-22",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-2.p4",
+      "category": "unchanged-file",
+      "statement": "The unchanged HTTP mapper classifies client errors by their message.",
+      "covered_if": "Identifies the message allowlist as the service error contract.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/http/response.mjs:13-22",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-2.p5",
+      "category": "defect",
+      "statement": "New token-validation failures surface as HTTP 500 responses.",
+      "covered_if": "Connects unrecognized token errors to retryable server-failure responses.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/orders/tokens.mjs:6",
+          "side": "head"
+        },
+        {
+          "ref": "src/http/orders.mjs:12",
+          "side": "head"
+        },
+        {
+          "ref": "src/http/response.mjs:21",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-2.p6",
+      "category": "behavior",
+      "statement": "Replaying a token does not extend its deadline.",
+      "covered_if": "Explains expiry is fixed rather than sliding.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/orders/service.mjs:21",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-2.p7",
+      "category": "behavior",
+      "statement": "Pruning expired tokens retains the original orders.",
+      "covered_if": "Explains pruning only removes replay identities.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/storage/orders.mjs:37-46",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-2.p8",
+      "category": "behavior",
+      "statement": "Tokens expire exactly at their deadline.",
+      "covered_if": "Explains equality with the deadline counts as expired.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/storage/orders.mjs:31",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-2.p9",
+      "category": "behavior",
+      "statement": "The default replay-token lifetime is one minute.",
+      "covered_if": "Names the 60000ms default.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/orders/service.mjs:7",
+          "side": "head"
+        }
+      ]
+    }
+  ],
+  "false_claim_traps": [
+    {
+      "id": "dev-2.t1",
+      "statement": "Invalid tokens produce HTTP 400 responses.",
+      "why_false": "The unchanged message allowlist does not recognize the new token errors, so they fall through to HTTP 500.",
+      "evidence": [
+        {
+          "ref": "src/http/response.mjs:13-22",
+          "side": "head"
+        },
+        {
+          "ref": "src/orders/tokens.mjs:6",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-2.t2",
+      "statement": "Expiry deletes the original order.",
+      "why_false": "Only the token map entry is removed.",
+      "evidence": [
+        {
+          "ref": "src/storage/orders.mjs:31",
+          "side": "head"
+        },
+        {
+          "ref": "src/storage/orders.mjs:34",
+          "side": "head"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+diff --git a/README.md b/README.md
+index c800baf..1030981 100644
+--- a/README.md
++++ b/README.md
+@@ -13,7 +13,9 @@ node --test test/*.test.mjs
+ No package installation is required. All monetary values are integer cents.
+ Orders progress from pending to paid to shipped, or from pending to cancelled.
+ Clients can supply an idempotency-token header when submitting an order.
+-Tokens are retained for the lifetime of the store. Reads return detached values.
++Service replay tokens expire after one minute by default; adapters may override
++tokenTtlMs when constructing OrderService. Expiry does not delete orders.
++Reads return detached values.
+ The repository checks versions on writes to reject stale updates.
+ 
+ The retry scheduler is driven by an external timer calling tick. Each tick
+diff --git a/src/orders/service.mjs b/src/orders/service.mjs
+index 8a26505..1a3f768 100644
+--- a/src/orders/service.mjs
++++ b/src/orders/service.mjs
+@@ -1,21 +1,26 @@
+ import { randomUUID } from 'node:crypto';
++import { normalizeToken, tokenDeadline } from './tokens.mjs';
+ import { createOrder, transition } from './model.mjs';
+ 
+ /** Application operations shared by HTTP handlers and background work. */
+ export class OrderService {
+-  constructor(store, { clock = Date.now, nextId = randomUUID } = {}) {
++  constructor(store, { clock = Date.now, nextId = randomUUID, tokenTtlMs = 60000 } = {}) {
+     this.store = store;
+     this.clock = clock;
+     this.nextId = nextId;
++    tokenDeadline(this.clock(), tokenTtlMs);
++    this.tokenTtlMs = tokenTtlMs;
+   }
+ 
+   submit(input, token) {
++    token = normalizeToken(token);
++    const now = this.clock();
+     if (token) {
+-      const existing = this.store.findByToken(token);
++      const existing = this.store.findByToken(token, now);
+       if (existing) return { order: existing, created: false };
+     }
+-    const order = createOrder(input, this.nextId(), this.clock());
+-    return { order: this.store.insert(order, token), created: true };
++    const order = createOrder(input, this.nextId(), now);
++    return { order: this.store.insert(order, token, tokenDeadline(now, this.tokenTtlMs)), created: true };
+   }
+ 
+   get(id) {
+diff --git a/src/orders/tokens.mjs b/src/orders/tokens.mjs
+new file mode 100644
+index 0000000..d523e86
+--- /dev/null
++++ b/src/orders/tokens.mjs
+@@ -0,0 +1,15 @@
++/** Bound replay identifiers before they reach the process-local index. */
++export function normalizeToken(token) {
++  if (token === undefined || token === null) return undefined;
++  if (typeof token !== 'string') throw new Error('token must be text');
++  const normalized = token.trim();
++  if (normalized.length > 128) throw new Error('token is too long');
++  if (/[\x00-\x1f\x7f]/.test(normalized)) throw new Error('token contains control characters');
++  return normalized || undefined;
++}
++
++export function tokenDeadline(now, ttlMs) {
++  if (!Number.isSafeInteger(ttlMs) || ttlMs < 1) throw new Error('invalid token lifetime');
++  if (!Number.isSafeInteger(now + ttlMs)) throw new Error('invalid token deadline');
++  return now + ttlMs;
++}
+diff --git a/src/storage/orders.mjs b/src/storage/orders.mjs
+index a0b0406..249799f 100644
+--- a/src/storage/orders.mjs
++++ b/src/storage/orders.mjs
+@@ -17,16 +17,32 @@ export class OrderStore {
+     return structuredClone(row);
+   }
+ 
+-  insert(order, token) {
++  insert(order, token, expiresAt = Infinity) {
+     if (this.rows.has(order.id)) throw new Error('duplicate order');
+     this.rows.set(order.id, structuredClone(order));
+-    if (token) this.tokens.set(token, order.id);
++    if (token) this.tokens.set(token, { id: order.id, expiresAt });
+     return this.find(order.id);
+   }
+ 
+-  findByToken(token) {
+-    const id = this.tokens.get(token);
+-    return id ? this.find(id) : undefined;
++  findByToken(token, now = Date.now()) {
++    const entry = this.tokens.get(token);
++    if (!entry) return undefined;
++    if (entry.expiresAt <= now) {
++      this.tokens.delete(token);
++      return undefined;
++    }
++    return this.find(entry.id);
++  }
++
++  pruneTokens(now = Date.now()) {
++    let removed = 0;
++    for (const [token, entry] of this.tokens) {
++      if (entry.expiresAt <= now) {
++        this.tokens.delete(token);
++        removed += 1;
++      }
++    }
++    return removed;
+   }
+ 
+   save(order, expectedVersion) {
+diff --git a/test/tokens.test.mjs b/test/tokens.test.mjs
+new file mode 100644
+index 0000000..f2dd385
+--- /dev/null
++++ b/test/tokens.test.mjs
+@@ -0,0 +1,54 @@
++import { test } from 'node:test';
++import assert from 'node:assert/strict';
++import { OrderStore } from '../src/storage/orders.mjs';
++import { OrderService } from '../src/orders/service.mjs';
++import { normalizeToken } from '../src/orders/tokens.mjs';
++
++const input = { customer: 'A', items: [{ sku: 'x', price: 1, quantity: 1 }] };
++function setup() {
++  let now = 0;
++  let id = 0;
++  const store = new OrderStore();
++  const service = new OrderService(store, {
++    clock: () => now, nextId: () => String(++id), tokenTtlMs: 100,
++  });
++  return { store, service, advance: time => { now = time; } };
++}
++
++test('token lifetime includes replay before but not at the deadline', () => {
++  const { service, store, advance } = setup();
++  const first = service.submit(input, 'request');
++  advance(99);
++  assert.equal(service.submit(input, 'request').order.id, first.order.id);
++  advance(100);
++  assert.equal(service.submit(input, 'request').created, true);
++  assert.equal(store.count(), 2);
++});
++
++test('pruning expires identities without removing their orders', () => {
++  const { service, store } = setup();
++  service.submit(input, 'a');
++  assert.equal(store.pruneTokens(99), 0);
++  assert.equal(store.pruneTokens(100), 1);
++  assert.equal(store.pruneTokens(101), 0);
++  assert.equal(store.count(), 1);
++});
++
++test('invalid tokens fail before creating a row', () => {
++  const { service, store } = setup();
++  for (const token of [42, 'a'.repeat(129), 'a\u0000b']) {
++    assert.throws(() => service.submit(input, token));
++  }
++  assert.equal(store.count(), 0);
++  assert.equal(normalizeToken(undefined), undefined);
++  assert.equal(normalizeToken('valid'), 'valid');
++});
++
++test('replay does not extend the original expiry', () => {
++  const { service, advance } = setup();
++  service.submit(input, 'a');
++  advance(50);
++  service.submit(input, 'a');
++  advance(100);
++  assert.equal(service.submit(input, 'a').created, true);
++});

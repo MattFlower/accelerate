@@ -1,0 +1,165 @@
+{
+  "case_id": "dev-1",
+  "split": "dev",
+  "kind": "planted-defect",
+  "branch": "feature/cache-read-path",
+  "summary_for_maintainers": "Shared warm-read references violate detached reads within a broader batch/telemetry feature. Private reproduction: submit an order, call service.get(id), set result.total=999, then service.getMany([id])[0].total is 999 while store.rows.get(id).total retains the original. Do not copy this witness into the fixture.",
+  "points": [
+    {
+      "id": "dev-1.p1",
+      "category": "why",
+      "statement": "Batch lookup supports dashboard refreshes that fetch many known order IDs.",
+      "covered_if": "Connects bulk lookup to dashboard refresh requests.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "commit:1",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-1.p2",
+      "category": "behavior",
+      "statement": "Bulk lookup preserves input positions.",
+      "covered_if": "Explains each result occupies its requested position.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/storage/orders.mjs:24",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-1.p3",
+      "category": "behavior",
+      "statement": "Missing bulk lookup results occupy undefined slots.",
+      "covered_if": "Identifies undefined placeholders for missing orders.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/storage/orders.mjs:24",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-1.p4",
+      "category": "behavior",
+      "statement": "Bulk lookup preserves duplicate IDs.",
+      "covered_if": "Explains repeated IDs produce repeated result slots.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/storage/orders.mjs:24",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-1.p5",
+      "category": "behavior",
+      "statement": "Resetting metrics retains cached entries.",
+      "covered_if": "Explains subsequent reads remain warm after reset.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/storage/orders.mjs:28",
+          "side": "head"
+        },
+        {
+          "ref": "src/storage/cache.mjs:44",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-1.p6",
+      "category": "invariant",
+      "statement": "Repository reads promise detached objects.",
+      "covered_if": "Explains editing a returned object must not change later reads.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/storage/orders.mjs:3",
+          "side": "head"
+        },
+        {
+          "ref": "src/storage/cache.mjs:20",
+          "side": "base"
+        }
+      ]
+    },
+    {
+      "id": "dev-1.p7",
+      "category": "defect",
+      "statement": "Mutating a warm-read result corrupts later cached results.",
+      "covered_if": "Explains caller mutation becomes visible in a later read.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/storage/cache.mjs:23",
+          "side": "head"
+        },
+        {
+          "ref": "src/storage/orders.mjs:13",
+          "side": "head"
+        },
+        {
+          "ref": "src/storage/orders.mjs:24",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-1.p8",
+      "category": "behavior",
+      "statement": "Cache metrics are exposed through the service.",
+      "covered_if": "Identifies service.readMetrics as the public telemetry API.",
+      "partial_if": "Mentions the feature without explaining this guarantee.",
+      "evidence": [
+        {
+          "ref": "src/orders/service.mjs:29",
+          "side": "head"
+        },
+        {
+          "ref": "src/storage/orders.mjs:27",
+          "side": "head"
+        }
+      ]
+    }
+  ],
+  "false_claim_traps": [
+    {
+      "id": "dev-1.t1",
+      "statement": "Editing a warm result changes the backing row.",
+      "why_false": "Row storage remains separately cloned.",
+      "evidence": [
+        {
+          "ref": "src/storage/orders.mjs:35",
+          "side": "head"
+        },
+        {
+          "ref": "src/storage/cache.mjs:29",
+          "side": "head"
+        }
+      ]
+    },
+    {
+      "id": "dev-1.t2",
+      "statement": "Resetting telemetry flushes cached orders.",
+      "why_false": "Only counters reset; entries are retained.",
+      "evidence": [
+        {
+          "ref": "src/storage/cache.mjs:44",
+          "side": "head"
+        },
+        {
+          "ref": "src/storage/orders.mjs:29",
+          "side": "head"
+        }
+      ]
+    }
+  ]
+}

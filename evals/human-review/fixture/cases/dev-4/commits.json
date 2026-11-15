@@ -1,0 +1,6 @@
+[
+  {
+    "message": "Group purchase operations and persistence adapters\n\nUpdate caller imports to preserve module resolution after grouping lifecycle and persistence code into their new packages.",
+    "patch_file": "change.patch"
+  }
+]
