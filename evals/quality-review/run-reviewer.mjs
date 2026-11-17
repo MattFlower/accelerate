@@ -4,7 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertNoFuture, git } from './case-repo.mjs';
-import { isolatedEnv, changedInstructionFiles } from './isolated-env.mjs';
+import { callBudget, takeCall } from './call-budget.mjs';
+import { isolatedEnv, changedInstructionFiles, authSecrets, redact } from './isolated-env.mjs';
 
 export const schemaPath = fileURLToPath(new URL('./findings.schema.json', import.meta.url));
 const schema = JSON.parse(readFileSync(schemaPath));
@@ -45,7 +46,7 @@ export function validateFindings(value) {
 }
 export function parseTranscript(stdout, runtime) {
   const toolCalls = {}, seen = new Set();
-  let final, modelReported = null, error = null;
+  let final, modelReported = null, error = null, cost = null;
   const count = (id, name) => { const key = `${name}:${id}`; if (!seen.has(key)) { seen.add(key); toolCalls[name] = (toolCalls[name] ?? 0) + 1; } };
   for (const line of stdout.split('\n').filter(s => s.trim())) {
     let e; try { e = JSON.parse(line); } catch { error = 'Unparseable transcript JSONL'; continue; }
@@ -70,30 +71,33 @@ export function parseTranscript(stdout, runtime) {
         }
       }
       if (e.type === 'result') {
+        if (Number.isFinite(e.total_cost_usd)) cost = (cost ?? 0) + e.total_cost_usd;
         if (e.is_error || (e.subtype && e.subtype !== 'success')) error = `Claude result: ${e.subtype ?? 'error'}`;
         final = e.structured_output ?? e.result;
       }
     }
   }
-  return { toolCalls, modelReported, final, error };
+  return { toolCalls, modelReported, final, error, cost };
 }
 export async function runReviewer(opts) {
   const { caseId, caseRepo, expectedShas: { base, head }, runtime, model, effort, sample, promptFile, outDir,
-    scratchRoot, passAuth = [], bin = runtime, timeoutMs = 20 * 60 * 1000 } = opts;
+    scratchRoot, passAuth = false, bin = runtime, timeoutMs = 20 * 60 * 1000 } = opts;
   assertNoFuture(caseRepo, [base, head]);
   if (git(caseRepo, 'rev-parse', 'HEAD') !== head) throw new Error('Case checkout must be at expected head');
   if (!/^[A-Za-z0-9_-]+$/.test(caseId) || !Number.isInteger(sample) || sample < 1) throw new Error('Invalid trial identity');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error('Invalid timeoutMs');
-  const argv = buildArgv(opts), { env, manifest } = isolatedEnv({ scratchRoot, dest: caseRepo, passAuth });
+  const argv = buildArgv(opts), { env, manifest } = isolatedEnv({ scratchRoot, dest: caseRepo, passAuth, runtime });
+  const secrets = authSecrets(passAuth);
   const prompt = readFileSync(promptFile);
   const record = { caseId, repo: opts.repo ?? resolve(caseRepo), base, head, runtime, modelRequested: model,
     effortRequested: effort, modelReported: null, sample, promptSha256: createHash('sha256').update(prompt).digest('hex'),
     instructionManifest: manifest, instructionFilesChanged: changedInstructionFiles(caseRepo), toolCalls: {},
-    durationMs: 0, exitCode: null, status: 'error', findings: null, error: null };
+    cost: null, durationMs: 0, exitCode: null, status: 'error', findings: null, error: null };
   mkdirSync(outDir, { recursive: true });
   const prefix = join(outDir, `${caseId}.${runtime}.s${sample}`), start = performance.now();
   const stdoutChunks = [], stderrChunks = [];
   let timedOut = false, launchError;
+  takeCall(opts.budget ?? callBudget());
   await new Promise(done => {
     const child = spawn(bin, argv, { cwd: caseRepo, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     const timer = setTimeout(() => {
@@ -107,11 +111,11 @@ export async function runReviewer(opts) {
     child.stdin.end(prompt);
   });
   record.durationMs = Math.round(performance.now() - start);
-  const stdout = Buffer.concat(stdoutChunks);
-  writeFileSync(`${prefix}.jsonl`, stdout); writeFileSync(`${prefix}.stderr`, Buffer.concat(stderrChunks));
+  const stdout = redact(Buffer.concat(stdoutChunks).toString(), secrets);
+  writeFileSync(`${prefix}.jsonl`, stdout); writeFileSync(`${prefix}.stderr`, redact(Buffer.concat(stderrChunks).toString(), secrets));
   try {
     const parsed = parseTranscript(stdout.toString('utf8'), runtime);
-    record.toolCalls = parsed.toolCalls; record.modelReported = parsed.modelReported;
+    record.cost = parsed.cost; record.toolCalls = parsed.toolCalls; record.modelReported = parsed.modelReported;
     if (timedOut) throw new Error(`Timeout after ${timeoutMs}ms`);
     if (launchError) throw new Error(launchError);
     if (record.exitCode !== 0) throw new Error(`Reviewer exit code ${record.exitCode}`);
@@ -120,6 +124,7 @@ export async function runReviewer(opts) {
     record.findings = validateFindings(typeof parsed.final === 'string' ? JSON.parse(parsed.final) : parsed.final);
     record.status = 'ok';
   } catch (e) { record.error = timedOut ? `Timeout after ${timeoutMs}ms` : e.message; record.status = timedOut ? 'cancelled' : 'error'; }
+  Object.assign(record, JSON.parse(redact(JSON.stringify(record), secrets)));
   writeFileSync(`${prefix}.json`, `${JSON.stringify(record, null, 2)}\n`);
   return record;
 }

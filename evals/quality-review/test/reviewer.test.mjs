@@ -1,8 +1,9 @@
+import { callBudget } from '../call-budget.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { git, buildCaseRepo } from '../case-repo.mjs';
@@ -21,7 +22,7 @@ function fixture(t) {
   git(source, 'add', '.'); git(source, 'commit', '-qm', 'head'); const head = git(source, 'rev-parse', 'HEAD');
   const caseRepo = join(root, 'case'), expectedShas = buildCaseRepo({ sourceRepo: source, base, head, dest: caseRepo });
   const promptFile = join(root, 'prompt'); writeFileSync(promptFile, Buffer.from('exact prompt\r\n\u00e9\n\0'));
-  return { root, source, base, head, caseRepo, expectedShas, promptFile, caseId: 'test-1', model: 'fake-model', effort: 'high', sample: 1, outDir: join(root, 'out'), scratchRoot: root };
+  return { budget: callBudget(10), root, source, base, head, caseRepo, expectedShas, promptFile, caseId: 'test-1', model: 'fake-model', effort: 'high', sample: 1, outDir: join(root, 'out'), scratchRoot: root };
 }
 function fake(opts, runtime, mode) {
   const bin = join(opts.root, runtime), marker = join(opts.root, 'received.json');
@@ -123,10 +124,14 @@ test('CLI refuses spend and dry-run prints keys without environment or prompt va
   const env = { ...process.env, PATH: `${f.root}:${process.env.PATH}`, FOO_SECRET: 'SECRET_VALUE_DO_NOT_PRINT', LANG: 'PRIVATE_LANG_VALUE' };
   const denied = spawnSync(process.execPath, args, { env, encoding: 'utf8' });
   assert.notEqual(denied.status, 0); assert.match(denied.stderr, /confirm-spend/); assert.equal(existsSync(marker), false);
+  for (const extra of [[], ['--max-calls', '1']]) {
+    const capped = spawnSync(process.execPath, [...args, '--confirm-spend', ...extra], { env, encoding: 'utf8' });
+    assert.notEqual(capped.status, 0); assert.match(capped.stderr, /max-calls/); assert.equal(existsSync(marker), false);
+  }
   const dry = spawnSync(process.execPath, [...args, '--dry-run'], { env, encoding: 'utf8' });
   assert.equal(dry.status, 0, dry.stderr); assert.equal(existsSync(marker), false);
   assert.ok(!dry.stdout.includes(env.FOO_SECRET)); assert.ok(!dry.stdout.includes(env.LANG)); assert.ok(!dry.stdout.includes('exact prompt'));
-  const plans = dry.stdout.trim().split('\n').map(JSON.parse); assert.deepEqual(plans.map(p => p.sample), [1, 2]);
+  const plans = dry.stdout.trim().split('\n').slice(1).map(JSON.parse); assert.deepEqual(plans.map(p => p.sample), [1, 2]);
   assert.ok(plans[0].envKeys.includes('HOME')); assert.ok(!plans[0].envKeys.includes('FOO_SECRET'));
   assert.ok(plans[0].argv.includes('--json'));
   assert.equal(existsSync(join(f.outDir, 'trials.jsonl')), false);
@@ -168,4 +173,54 @@ test('Claude Bash counts include the first two command words and deduplicate cal
   const transcript = JSON.stringify({ type: 'assistant', message: { content: calls } });
   assert.deepEqual(parseTranscript(transcript, 'claude').toolCalls,
     { Bash: 7, 'Bash:git diff': 2, 'Bash:git log': 1, 'Bash:git show': 1, 'Bash:git status': 1 });
+});
+
+test('auth shares only real Codex home; tokens are redacted from all reviewer artifacts', async t => {
+  const f = fixture(t), realHome = join(f.root, 'real-codex-home');
+  const old = { CODEX_HOME: process.env.CODEX_HOME, CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN };
+  const token = 'fake-oauth-token-round4';
+  Object.assign(process.env, { CODEX_HOME: realHome, CLAUDE_CODE_OAUTH_TOKEN: token });
+  t.after(() => { for (const [k, v] of Object.entries(old)) if (v === undefined) delete process.env[k]; else process.env[k] = v; });
+  // The home does not exist: the harness must neither read nor create it.
+  const { bin, marker } = fake(f, 'codex', 'empty');
+  await runReviewer({ ...f, runtime: 'codex', bin, passAuth: true });
+  assert.equal(JSON.parse(readFileSync(marker)).env.CODEX_HOME, realHome);
+  assert.equal(existsSync(realHome), false);
+  const casesFile = join(f.root, 'auth-cases.json');
+  writeFileSync(casesFile, JSON.stringify({ cases: [{ id: f.caseId, split: 'dev', base: f.base, head: f.head }] }));
+  const args = [resolve('evals/quality-review/run-trials.mjs'), '--cases', casesFile, '--limitless', f.source,
+    '--runtime', 'codex', '--model', 'fake', '--effort', 'high', '--prompt', f.promptFile, '--k', '1',
+    '--out', f.outDir, '--confirm-spend', '--max-calls', '1'];
+  for (const flags of [[], ['--pass-auth']]) {
+    const result = spawnSync(process.execPath, [...args, ...flags], { env: { ...process.env, PATH: `${f.root}:${process.env.PATH}` }, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const home = JSON.parse(readFileSync(marker)).env.CODEX_HOME;
+    if (flags.length) assert.equal(home, realHome); else assert.ok(home.includes('/qr-env-'));
+  }
+  assert.equal(existsSync(realHome), false);
+  await runReviewer({ ...f, runtime: 'codex', bin, passAuth: false });
+  assert.ok(JSON.parse(readFileSync(marker)).env.CODEX_HOME.startsWith(f.root + '/qr-env-'));
+  const claude = join(f.root, 'fake-claude');
+  writeFileSync(claude, `#!${process.execPath}
+for await (const b of process.stdin) {}
+console.error(process.env.CLAUDE_CODE_OAUTH_TOKEN);
+console.log(JSON.stringify({type:'result',total_cost_usd:0.25,structured_output:{findings:[]},echo:process.env.CLAUDE_CODE_OAUTH_TOKEN}));
+`, { mode: 0o755 });
+  const r = await runReviewer({ ...f, runtime: 'claude', bin: claude, passAuth: true });
+  assert.equal(r.cost, .25);
+  function walk(dir) { for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, e.name);
+    assert.ok(!['auth.json', '.credentials.json'].includes(e.name));
+    if (e.isDirectory()) walk(path); else assert.ok(!readFileSync(path).includes(Buffer.from(token)), path);
+  } }
+  walk(f.outDir);
+  for (const name of readdirSync(f.root).filter(n => n.startsWith('qr-env-'))) walk(join(f.root, name));
+  delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  await assert.rejects(runReviewer({ ...f, runtime: 'claude', bin: claude, passAuth: true }), /CLAUDE_CODE_OAUTH_TOKEN not set \(run claude setup-token\)/);
+});
+
+test('direct reviewer refuses an uncapped call before spawning', async t => {
+  const f = fixture(t), { bin, marker } = fake(f, 'codex', 'empty');
+  await assert.rejects(runReviewer({ ...f, runtime: 'codex', bin, budget: undefined }), /max-calls/);
+  assert.equal(existsSync(marker), false);
 });

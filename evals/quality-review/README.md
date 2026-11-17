@@ -286,3 +286,44 @@ Deliberate divergences from limitless:
 
 Any change to JUDGE_RULE, TEMPLATE, matching, or the caught rule is a scoring
 change that needs Matt's approval.
+
+## Round 4
+
+1. Authentication uses a boolean `--pass-auth` on trial, judging, and validation
+   CLIs. Authenticated Codex children receive the resolved real `CODEX_HOME`
+   (`CODEX_HOME` or `~/.codex`) with `--ignore-user-config --strict-config`.
+   The harness never reads, writes, or copies credentials there. Authenticated
+   Claude children receive only `CLAUDE_CODE_OAUTH_TOKEN`; missing tokens fail
+   before launch with a `claude setup-token` hint. Direct auth-name lists accept
+   only that name; all others throw `invalid auth variable`. HOME,
+   XDG_CONFIG_HOME, CLAUDE_CONFIG_DIR, and TMPDIR remain fresh scratch directories.
+   Token values, including short tokens, are redacted from written outputs.
+   This supersedes the auth descriptions in rounds 1–3.
+
+2. `run-trials.mjs`, `judge-trials.mjs`, and `validation-sample.mjs` accept
+   `--max-calls N` (a nonnegative integer). They print
+   `Planned model calls (maximum including retries): N` and reject plans above
+   an explicit cap before launching. Reviewer plans count cases times samples;
+   judge plans count unique uncached requests times two attempts. Each launch
+   also consumes a shared running counter. Uncached execution requires both an
+   explicit sufficient cap and `--confirm-spend`. Cache-only scoring needs
+   neither. Dry-run without a cap remains available and makes no calls; an
+   explicit cap is checked even for dry-run. Validation sampling remains
+   cache-only, so its maximum is always zero. Claude result-event costs sum into
+   `cost` in trial/judge records; absent costs and Codex costs are null.
+
+3. `shortcut-gate.mjs --limitless /path/to/limitless --out report.json`
+   (optionally `--cases file`) makes no model calls. It uses the existing snapshot
+   builder and reads base..head diffs with rename detection disabled. It rejects
+   everything except real escapes-dev and clean dev cases before preparing repos.
+   JSON and stdout report the majority baseline, numeric feature AUCs (higher
+   values predict defect, ties count half), best threshold accuracy in either
+   direction, and boolean feature 2x2 counts. Threshold accuracy is descriptive
+   in-sample accuracy, not a fitted heldout evaluation. AUC is null without both
+   classes. Binary numstat entries contribute zero added/removed lines while
+   still counting as changed files; extensionless paths count as one extension
+   category. Docs means paths under doc/docs/documentation or markdown, MDX,
+   reStructuredText, or text extensions. Test/spec path matching ignores case.
+
+Round-4 verification uses only fake CLIs and local git fixtures. No real Codex
+or Claude calls are made.

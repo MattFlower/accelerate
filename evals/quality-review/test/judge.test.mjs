@@ -1,7 +1,8 @@
+import { callBudget } from '../call-budget.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { JUDGE_RULE, TEMPLATE, judgePayload, normalizeJudgment, keyFor, runJudge, judgeArgv, judgedMetrics, cleanMetrics, wilson } from '../judge.mjs';
@@ -31,14 +32,15 @@ let prompt='';for await(const b of process.stdin)prompt+=b;
 writeFileSync(${JSON.stringify(marker)},JSON.stringify({prompt,env:process.env,argv:process.argv.slice(2),cwd:process.cwd()}));
 const output={matches:[${JSON.stringify(match())}]};
 console.log(JSON.stringify(${runtime === 'codex' ? "{type:'item.completed',item:{type:'agent_message',text:JSON.stringify(output)}}" : "{type:'result',subtype:'success',structured_output:output,total_cost_usd:.01}"}));\n`, { mode: 0o755 });
-  const previous = { PATH: process.env.PATH, AUTH_TEST: process.env.AUTH_TEST, PARENT_SECRET: process.env.PARENT_SECRET };
-  Object.assign(process.env, { PATH: `${root}:${process.env.PATH}`, AUTH_TEST: 'auth-secret-value', PARENT_SECRET: 'parent-secret-value' });
+  const previous = { PATH: process.env.PATH, CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN, PARENT_SECRET: process.env.PARENT_SECRET };
+  Object.assign(process.env, { PATH: `${root}:${process.env.PATH}`, CLAUDE_CODE_OAUTH_TOKEN: 'auth-secret-value', PARENT_SECRET: 'parent-secret-value' });
   t.after(() => { for (const [k, v] of Object.entries(previous)) if (v === undefined) delete process.env[k]; else process.env[k] = v; });
   const findings = [{ ...finding, detail: 'auth-secret-value auth-secret-value' }];
-  const opts = { judge: `${runtime}:fake:high`, item, findings, cacheDir: join(root, 'cache'), passAuth: ['AUTH_TEST'], confirmSpend: true };
+  const opts = { judge: `${runtime}:fake:high`, item, findings, cacheDir: join(root, 'cache'), passAuth: true, confirmSpend: true, budget: callBudget(2) };
   const first = await runJudge(opts); assert.equal(first.modelCalls, 1);
+  assert.equal(first.cost, runtime === 'claude' ? .01 : null);
   const received = JSON.parse(readFileSync(marker));
-  assert.equal(received.env.PARENT_SECRET, undefined); assert.equal(received.env.AUTH_TEST, 'auth-secret-value');
+  assert.equal(received.env.PARENT_SECRET, undefined); assert.equal(received.env.CLAUDE_CODE_OAUTH_TOKEN, runtime === 'claude' ? 'auth-secret-value' : undefined);
   assert.ok(!received.prompt.includes('auth-secret-value')); assert.ok(received.prompt.includes('[redacted] [redacted]'));
   assert.equal(received.prompt, `${JUDGE_RULE}\n\n${TEMPLATE}${JSON.stringify(judgePayload(item, findings, ['auth-secret-value']))}`);
   const argv = [...received.argv];
@@ -72,8 +74,8 @@ test('CLI refuses unconfirmed spend, requires two judges, dry-run never launches
   const cases = join(root, 'cases.json'); writeFileSync(cases, JSON.stringify({ cases: [item] }));
   const args = [resolve('evals/quality-review/judge-trials.mjs'), '--trials', trials, '--cases', cases, '--cache', join(root, 'cache'), '--out', join(root, 'report.json'), '--judge', judges[0], '--judge', judges[1]];
   const denied = spawnSync(process.execPath, args, { encoding: 'utf8' }); assert.notEqual(denied.status, 0); assert.match(denied.stderr, /confirm-spend/);
-  const dry = spawnSync(process.execPath, [...args, '--dry-run'], { encoding: 'utf8' }); assert.equal(dry.status, 0, dry.stderr); assert.equal(JSON.parse(dry.stdout).judgeCalls, 2);
-  assert.ok(JSON.parse(dry.stdout).plans.every(p => p.envKeys.includes('HOME')));
+  const dry = spawnSync(process.execPath, [...args, '--dry-run'], { encoding: 'utf8' }); assert.equal(dry.status, 0, dry.stderr); assert.equal(JSON.parse(dry.stdout.trim().split('\n').slice(1).join('\n')).judgeCalls, 2);
+  assert.ok(JSON.parse(dry.stdout.trim().split('\n').slice(1).join('\n')).plans.every(p => p.envKeys.includes('HOME')));
   const one = spawnSync(process.execPath, args.slice(0, -2), { encoding: 'utf8' }); assert.match(one.stderr, /exactly two/);
 });
 
@@ -86,8 +88,11 @@ const path=${JSON.stringify(count)};const n=existsSync(path)?Number(readFileSync
 console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:n===0?'malformed':JSON.stringify({matches:[${JSON.stringify(match())}]})}}));
 `, { mode: 0o755 });
   const cacheDir = join(root, 'cache');
-  const result = await runJudge({ judge: judges[0], item, findings: [finding], cacheDir, bin, confirmSpend: true });
+  const result = await runJudge({ judge: judges[0], item, findings: [finding], cacheDir, bin, confirmSpend: true, budget: callBudget(2) });
   assert.equal(result.modelCalls, 2); assert.equal(readFileSync(count, 'utf8'), '2');
+  writeFileSync(count, '0');
+  await assert.rejects(runJudge({ judge: judges[0], item, findings: [finding], cacheDir: join(root, 'other-cache'), bin, confirmSpend: true, budget: callBudget(1) }), /max-calls exhausted/);
+  assert.equal(readFileSync(count, 'utf8'), '1');
   const trials = [{ caseId: item.id, status: 'ok', findings: [finding] }, { caseId: item.id, status: 'error', findings: null }];
   const metrics = judgedMetrics(trials, [item], judges, cacheDir);
   assert.equal(metrics.unjudged, 1); assert.equal(metrics.recall.denominator, 0); assert.equal(metrics.recall.rate, null);
@@ -114,14 +119,18 @@ test('passed secrets share cache keys across judging, metrics, sampling and CLI 
   for (const runtime of ['codex', 'claude']) writeFileSync(join(root, runtime), `#!${process.execPath}
 import {appendFileSync} from 'node:fs';
 let prompt='';for await(const b of process.stdin)prompt+=b;
-if(prompt.includes(${JSON.stringify(secret)}) || process.env.AUTH_TEST!==${JSON.stringify(secret)})process.exit(1);
+if(prompt.includes(${JSON.stringify(secret)}) || (${JSON.stringify(runtime)} === 'claude' && process.env.CLAUDE_CODE_OAUTH_TOKEN!==${JSON.stringify(secret)}))process.exit(1);
 appendFileSync(${JSON.stringify(count)},'call\\n');
 const output={matches:[${JSON.stringify(match())}]};
 console.log(JSON.stringify(${runtime === 'codex' ? "{type:'item.completed',item:{type:'agent_message',text:JSON.stringify(output)}}" : "{type:'result',subtype:'success',structured_output:output}"}));
 `, { mode: 0o755 });
-  const env = { ...process.env, PATH: `${root}:${process.env.PATH}`, AUTH_TEST: secret };
-  const args = [resolve('evals/quality-review/judge-trials.mjs'), '--trials', trialsDir, '--cases', cases, '--cache', cacheDir, '--out', out, '--judge', judges[0], '--judge', judges[1], '--pass-auth', 'AUTH_TEST', '--pass-auth', 'OTHER_AUTH'];
-  const first = spawnSync(process.execPath, [...args, '--confirm-spend'], { env, encoding: 'utf8' });
+  const env = { ...process.env, PATH: `${root}:${process.env.PATH}`, CLAUDE_CODE_OAUTH_TOKEN: secret };
+  const args = [resolve('evals/quality-review/judge-trials.mjs'), '--trials', trialsDir, '--cases', cases, '--cache', cacheDir, '--out', out, '--judge', judges[0], '--judge', judges[1], '--pass-auth'];
+  for (const extra of [[], ['--max-calls', '3']]) {
+    const denied = spawnSync(process.execPath, [...args, '--confirm-spend', ...extra], { env, encoding: 'utf8' });
+    assert.notEqual(denied.status, 0); assert.match(denied.stderr, /max-calls/); assert.equal(existsSync(count), false);
+  }
+  const first = spawnSync(process.execPath, [...args, '--confirm-spend', '--max-calls', '4'], { env, encoding: 'utf8' });
   assert.equal(first.status, 0, first.stderr);
   assert.equal(readFileSync(count, 'utf8'), 'call\ncall\n');
   const report = JSON.parse(readFileSync(out));
@@ -135,8 +144,9 @@ console.log(JSON.stringify(${runtime === 'codex' ? "{type:'item.completed',item:
   assert.equal(second.status, 0, second.stderr);
   assert.equal(JSON.parse(readFileSync(out)).pendingJudgeCalls, 0);
   assert.equal(readFileSync(count, 'utf8'), 'call\ncall\n');
+  for (const path of [out, sampleOut + '.json', sampleOut + '.csv', ...readdirSync(cacheDir).map(n => join(cacheDir, n))]) assert.ok(!readFileSync(path, 'utf8').includes(secret), path);
   for (const name of ['bad-name', 'HOME']) {
     const invalid = spawnSync(process.execPath, [...args, '--pass-auth', name, '--dry-run'], { env, encoding: 'utf8' });
-    assert.notEqual(invalid.status, 0); assert.match(invalid.stderr, /Invalid auth variable/);
+    assert.notEqual(invalid.status, 0); assert.match(invalid.stderr, /Invalid argument/);
   }
 });

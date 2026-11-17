@@ -93,8 +93,7 @@ test('isolated environment is fresh, explicit auth only, instructions hashed', t
   assert.deepEqual(isolated.manifest, instructionManifest(dest));
   assert.equal(isolated.manifest.length, 3);
   assert.ok(isolated.manifest.every(e => /^[a-f0-9]{64}$/.test(e.sha256)));
-  const second = isolatedEnv({ scratchRoot: root, passAuth: ['ANTHROPIC_API_KEY'] });
-  assert.equal(second.env.ANTHROPIC_API_KEY, 'test-key'); assert.notEqual(second.dirs.HOME, isolated.dirs.HOME);
+  assert.throws(() => isolatedEnv({ scratchRoot: root, passAuth: ['ANTHROPIC_API_KEY'] }), /invalid auth variable/);
 });
 test('limitless first exported case passes check 5', { skip: !process.env.QR_EVAL_LIMITLESS }, t => {
   const root = scratch(t);

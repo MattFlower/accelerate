@@ -1,6 +1,8 @@
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { planCalls } from './call-budget.mjs';
+import { redact } from './isolated-env.mjs';
 import { readInputs } from './judge-trials.mjs';
 import { judgingTrials, cachedJudgment, targetOf, secretsForAuth } from './judge.mjs';
 
@@ -34,14 +36,17 @@ export function validationSample(trials, cases, judges, cacheDir, n = 50, seed =
   return { seed, requested: n, quotas, available: Object.fromEntries(Object.entries(pools).map(([k, v]) => [k, v.length])), rows };
 }
 export function main(args) {
-  const opts = { judge: [], passAuth: [] };
+  const opts = { judge: [], passAuth: false };
   for (let i = 0; i < args.length; i++) {
     const key = args[i].replace(/^--/, '');
-    if (!['trials', 'cases', 'judge', 'cache', 'out', 'n', 'seed', 'pass-auth'].includes(key) || !args[i + 1]) throw new Error(`Invalid argument: ${args[i]}`);
-    const value = args[++i]; if (key === 'judge') opts.judge.push(targetOf(value)); else if (key === 'pass-auth') opts.passAuth.push(value); else opts[key] = value;
+    if (key === 'pass-auth') { opts.passAuth = true; continue; }
+    if (!['trials', 'cases', 'judge', 'cache', 'out', 'n', 'seed', 'max-calls'].includes(key) || !args[i + 1]) throw new Error(`Invalid argument: ${args[i]}`);
+    const value = args[++i]; if (key === 'judge') opts.judge.push(targetOf(value)); else opts[key] = value;
   }
   if (opts.judge.length !== 2 || !opts.trials || !opts.cache || !opts.out) throw new Error('Required: --trials --judge (twice) --cache --out');
+  planCalls(0, opts['max-calls']);
   const { trials, cases } = readInputs(opts), report = validationSample(trials, cases, opts.judge, opts.cache, Number(opts.n ?? 50), Number(opts.seed ?? 1), secretsForAuth(opts.passAuth));
+  Object.assign(report, JSON.parse(redact(JSON.stringify(report), secretsForAuth(opts.passAuth))));
   writeFileSync(opts.out + '.json', JSON.stringify(report, null, 2) + '\n');
   const columns = ['caseId', 'sample', 'stratum', 'goldSummary', 'goldFile', 'goldLines', 'findingTitle', 'findingDetail', 'findingFile', 'findingLine', 'judgeA', 'judgeB', 'human'];
   const cell = v => '"' + String(Array.isArray(v) ? JSON.stringify(v) : v ?? '').replaceAll('"', '""') + '"';

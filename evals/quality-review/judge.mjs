@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isolatedEnv } from './isolated-env.mjs';
+import { callBudget, takeCall } from './call-budget.mjs';
+import { isolatedEnv, authSecrets, requireAuth } from './isolated-env.mjs';
 import { parseTranscript, validateFindings } from './run-reviewer.mjs';
 
 // limitless e42003a src/evals/judge.ts:22–28, exact prompt bytes.
@@ -21,7 +22,7 @@ export const JUDGE_PROMPT_VERSION = hash([JUDGE_RULE, TEMPLATE, 1]);
 export const schemaPath = fileURLToPath(new URL('./judgment.schema.json', import.meta.url));
 // Divergence: explicit auth values instead of limitless's global credential registry.
 export function redact(text, secrets = []) {
-  for (const secret of secrets) if (typeof secret === 'string' && secret.length >= 8) text = text.split(secret).join('[redacted]');
+  for (const secret of secrets) if (typeof secret === 'string' && secret.length > 0) text = text.split(secret).join('[redacted]');
   return text;
 }
 const outputOf = findings => Array.isArray(findings) ? { findings } : findings;
@@ -77,23 +78,22 @@ export function cachedJudgment(cacheDir, judge, item, findings, secrets = []) {
   return { ...value, matches: normalizeJudgment({ matches: value.matches }, item, findings) };
 }
 export function secretsForAuth(passAuth) {
-  const root = mkdtempSync(join(tmpdir(), 'qr-judge-auth-'));
-  try {
-    isolatedEnv({ scratchRoot: root, passAuth });
-    return passAuth.map(k => process.env[k]).filter(Boolean);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  return authSecrets(passAuth);
 }
-export async function runJudge({ judge, item, findings, cacheDir, passAuth = [], bin, timeoutMs = 10 * 60_000, confirmSpend = false }) {
+
+export async function runJudge({ judge, item, findings, cacheDir, passAuth = false, bin, timeoutMs = 10 * 60_000, confirmSpend = false, budget = callBudget() }) {
   const target = targetOf(judge), secrets = secretsForAuth(passAuth);
   const cached = cachedJudgment(cacheDir, target, item, findings, secrets);
   if (cached) return { ...cached, reused: true, modelCalls: 0 };
   if (!confirmSpend) throw new Error('Refusing judge launch: --confirm-spend required');
-  let error, cost = 0;
+  requireAuth(passAuth, target.runtime);
+  let error, cost = null;
   // judge.ts:200–275: retry only failed/malformed requests, twice total.
   for (let attempt = 0; attempt < 2; attempt++) {
+    takeCall(budget);
     const root = mkdtempSync(join(tmpdir(), 'qr-judge-')), cwd = join(root, 'empty'); mkdirSync(cwd);
     try {
-      const { env } = isolatedEnv({ scratchRoot: root, passAuth });
+      const { env } = isolatedEnv({ scratchRoot: root, passAuth, runtime: target.runtime });
       const prompt = `${JUDGE_RULE}\n\n${TEMPLATE}${JSON.stringify(judgePayload(item, findings, secrets))}`;
       const result = await new Promise((resolve, reject) => {
         const child = spawn(bin ?? target.runtime, judgeArgv({ ...target, cwd }), { cwd, env, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -103,12 +103,10 @@ export async function runJudge({ judge, item, findings, cacheDir, passAuth = [],
         child.on('error', reject); child.on('close', code => { clearTimeout(timer); resolve({ stdout, code, timedOut }); }); child.stdin.end(prompt);
       });
       const parsed = parseTranscript(result.stdout, target.runtime);
-      for (const line of result.stdout.split('\n').filter(Boolean)) {
-        try { const e = JSON.parse(line); if (typeof e.total_cost_usd === 'number') cost += e.total_cost_usd; } catch {}
-      }
+      if (parsed.cost !== null) cost = (cost ?? 0) + parsed.cost;
       if (result.code !== 0 || result.timedOut || parsed.error) throw new Error('judge request failed');
       const matches = normalizeJudgment(typeof parsed.final === 'string' ? JSON.parse(parsed.final) : parsed.final, item, findings).map(m => ({ ...m, reason: redact(m.reason, secrets) }));
-      const record = { matches, judge: target, ...(cost ? { cost } : {}) };
+      const record = { matches, judge: target, cost };
       mkdirSync(cacheDir, { recursive: true }); writeFileSync(join(cacheDir, keyFor(target, item, findings, secrets) + '.json'), JSON.stringify(record, null, 2) + '\n');
       return { ...record, reused: false, modelCalls: attempt + 1 };
     } catch (e) { error = e; } finally { rmSync(root, { recursive: true, force: true }); }

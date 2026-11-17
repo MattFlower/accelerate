@@ -2,16 +2,17 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { planCalls } from './call-budget.mjs';
 import { buildCaseRepo } from './case-repo.mjs';
-import { isolatedEnv } from './isolated-env.mjs';
+import { isolatedEnv, requireAuth } from './isolated-env.mjs';
 import { buildArgv, runReviewer } from './run-reviewer.mjs';
 
 export async function main(args) {
   const opts = { case: [] };
   for (let i = 0; i < args.length; i++) {
     const key = args[i].replace(/^--/, '');
-    if (['dry-run', 'confirm-spend'].includes(key)) opts[key] = true;
-    else if (['cases', 'limitless', 'runtime', 'model', 'effort', 'prompt', 'k', 'out', 'case'].includes(key) && args[i + 1] && !args[i + 1].startsWith('--')) {
+    if (['dry-run', 'confirm-spend', 'pass-auth'].includes(key)) opts[key] = true;
+    else if (['cases', 'limitless', 'runtime', 'model', 'effort', 'prompt', 'k', 'out', 'case', 'max-calls'].includes(key) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const value = args[++i]; if (key === 'case') opts.case.push(value); else opts[key] = value;
     } else throw new Error(`Invalid argument: ${args[i]}`);
   }
@@ -26,17 +27,19 @@ export async function main(args) {
   for (const id of opts.case) if (!data.cases.some(c => c.id === id)) throw new Error(`Unknown case: ${id}`);
   const cases = data.cases.filter(c => !opts.case.length || opts.case.includes(c.id));
   if (cases.some(c => !['dev', 'escapes-dev'].includes(c.split))) throw new Error('Only dev/escapes-dev cases may run');
+  requireAuth(opts['pass-auth'], opts.runtime);
+  const budget = planCalls(cases.length * k, opts['max-calls'], opts['dry-run']);
   mkdirSync(resolve(opts.out), { recursive: true });
   for (const entry of cases) {
     const root = mkdtempSync(join(tmpdir(), 'qr-trials-'));
     try {
       const caseRepo = join(root, 'case');
-      const expectedShas = buildCaseRepo({ sourceRepo: resolve(opts.limitless), base: entry.base, head: entry.head, dest: caseRepo });
+      const expectedShas = buildCaseRepo({ sourceRepo: resolve(opts.limitless), base: entry.base, head: entry.head, dest: caseRepo, runtime: opts.runtime, passAuth: opts['pass-auth'] });
       for (let sample = 1; sample <= k; sample++) {
         const trial = { caseId: entry.id, repo: entry.repo, caseRepo, expectedShas, runtime: opts.runtime,
-          model: opts.model, effort: opts.effort, promptFile: resolve(opts.prompt), sample, outDir: resolve(opts.out), scratchRoot: root };
+          model: opts.model, effort: opts.effort, promptFile: resolve(opts.prompt), sample, outDir: resolve(opts.out), scratchRoot: root, budget, passAuth: opts['pass-auth'] };
         if (opts['dry-run']) {
-          const { env } = isolatedEnv({ scratchRoot: root, dest: caseRepo });
+          const { env } = isolatedEnv({ scratchRoot: root, dest: caseRepo, runtime: opts.runtime, passAuth: opts['pass-auth'] });
           console.log(JSON.stringify({ caseId: entry.id, sample, argv: [opts.runtime, ...buildArgv(trial)], prompt: '<elided stdin>', envKeys: Object.keys(env).sort() }));
         } else {
           const record = await runReviewer(trial);
