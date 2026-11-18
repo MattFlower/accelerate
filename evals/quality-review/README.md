@@ -342,13 +342,31 @@ Limitless. All source references in this section are at `e42003a`.
 | Checks, rubric, severity and output rules | `src/pipeline/prompts.ts:713–737`. |
 
 `limitless-audit.json` freezes audit outputs for the 67 exported snapshots.
-They were generated locally using the pinned `diffSince` and its attribute
+`gen-limitless-audit.mjs` exports source from the pinned commit into a fresh
+temporary directory and runs `diffSince` and its attribute
 inspection, `gatesAt`, `parseAllow`, and `auditDiff` with empty private-string
 and registered-credential sets (`src/git/repos.ts:890–987,1253–1575`,
 `src/evals/prepare.ts:32–61,169–184`, `src/core/allow.ts:3–16`, and
 `src/gates/audit.ts:192–468`). The builder checks both tree IDs and the
 checked-out head before using the audit output. These audits use the harness's
 stripped snapshots, and the builder computes the stat on those same snapshots.
+
+From the repository root, set `QR_EVAL_LIMITLESS` to the local Limitless clone.
+Run the generator with Bun and a Git version that supports `--attr-source`
+and `cat-file -Z`. The default invocation
+writes the audit file if it is missing or already matches. With `--check`,
+the generator compares bytes in memory. Both modes exit nonzero on a mismatch
+and report any differing case records.
+
+```sh
+export QR_EVAL_LIMITLESS=/path/to/limitless
+bun evals/quality-review/gen-limitless-audit.mjs
+bun evals/quality-review/gen-limitless-audit.mjs --check
+QR_EVAL_FULL=1 node --test evals/quality-review/test/build-prompt.test.mjs
+```
+
+The prompt integration test compares two cases by default. `QR_EVAL_FULL=1`
+also compares all 67 exported cases against the pinned `reviewPrompt()`.
 
 There are two deliberate prompt divergences.
 
@@ -380,6 +398,12 @@ is “This review judges code behaviour. When the change edits instruction files
 is complete, current or warranted.” The stub follows `skills/human-review`'s
 frontmatter layout. The repo had no `agents/openai.yaml` example, so the stub
 uses minimal interface metadata and disables implicit invocation.
+
+Known gaps in the stub skill:
+
+- It asks for JSON matching `findings.schema.json`, which lives outside the skill directory.
+- It says “the worktree is read-only”, which is true only in the eval.
+- It has no request or intent section and gives no instructions for mapping the user's argument to base and head.
 
 Skill discovery by Codex and Claude remains unverified. Skill-invocation mode
 is outside this round, and trials use the inline prompt.

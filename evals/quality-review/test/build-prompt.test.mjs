@@ -43,8 +43,8 @@ function referencePrompt(source) {
   const helpers = [
     source.slice(source.indexOf('function fence('), source.indexOf('export function triagePrompt(')),
     'const redactGateData = input => input;',
-    'const gateTable = () => "(no automated checks)";',
-    'const finderFraming = () => ' + JSON.stringify(FINDER_FRAMING) + ';',
+    source.slice(source.indexOf('function gateTable('), source.indexOf('const PATCH_LIMIT')),
+    source.slice(source.indexOf('const THOROUGH'), source.indexOf('export function reviewPrompt(')),
   ];
   return new Function(stripTypeScriptTypes(helpers.join('\n') + '\n' + review.replace('export function', 'function')) +
     '\nreturn reviewPrompt;')();
@@ -60,6 +60,19 @@ function goldText(value) {
   return [];
 }
 
+function assertPinnedRendering(t, entry, reference) {
+  const caseRepo = join(scratch(t), 'case');
+  const { base, head } = buildCaseRepo({ sourceRepo, base: entry.base, head: entry.head, dest: caseRepo });
+  const options = { caseRepo, base, head };
+  const keep = buildPrompt(entry, options);
+  const stat = git(caseRepo, 'diff', '--stat', `${base}..${head}`);
+  const expected = reference({
+    ...entry.input, baseSha: base, stat, finder: 'adversarial', audit: audits[entry.id].audit,
+  }).replace(ORIGINAL_SUMMARY_CLAUSE, '').replace(ORIGINAL_VERDICT_RULE, OUTPUT_CONTRACT);
+  assert.equal(keep, expected, entry.id);
+  return { base, keep, options };
+}
+
 test('two real cases match pinned rendering, with no defect prose', pinnedOnly, t => {
   const reference = referencePrompt(pinnedPrompts());
   // review-178 exercises audit flags, review-138 exercises the empty audit branch.
@@ -68,14 +81,7 @@ test('two real cases match pinned rendering, with no defect prose', pinnedOnly, 
   for (const id of ['review-178', 'review-138']) {
     const entry = cases.find(item => item.id === id);
     assert.equal(entry.kind, 'real');
-    const caseRepo = join(scratch(t), 'case');
-    const { base, head } = buildCaseRepo({ sourceRepo, base: entry.base, head: entry.head, dest: caseRepo });
-    const options = { caseRepo, base, head };
-    const keep = buildPrompt(entry, options);
-    const stat = git(caseRepo, 'diff', '--stat', `${base}..${head}`);
-    const expected = reference({ ...entry.input, baseSha: base, stat, finder: 'adversarial', audit: audits[id].audit })
-      .replace(ORIGINAL_SUMMARY_CLAUSE, '').replace(ORIGINAL_VERDICT_RULE, OUTPUT_CONTRACT);
-    assert.equal(keep, expected);
+    const { base, keep, options } = assertPinnedRendering(t, entry, reference);
     assert.ok(keep.includes(quoteRequest(entry.input.prompt)));
     assert.ok(keep.includes(`Base commit: ${base}.`));
     assert.ok(keep.includes(`\`git diff ${base}..HEAD\`, \`git log ${base}..HEAD\``));
@@ -87,6 +93,15 @@ test('two real cases match pinned rendering, with no defect prose', pinnedOnly, 
     }
     assert.equal(buildPrompt(entry, { ...options, verifierClause: 'drop' }), keep.replace(VERIFIER_CLAUSE, ''));
     assert.equal(buildPrompt(entry, { ...options, omitRequest: true }), keep.replace(quoteRequest(entry.input.prompt), '> '));
+  }
+});
+
+test('all exported cases match pinned rendering', {
+  skip: pinnedOnly.skip || (process.env.QR_EVAL_FULL !== '1' && 'Set QR_EVAL_FULL=1 to compare every exported case'),
+}, async t => {
+  const reference = referencePrompt(pinnedPrompts());
+  for (const entry of cases) {
+    await t.test(entry.id, subtest => assertPinnedRendering(subtest, entry, reference));
   }
 });
 
