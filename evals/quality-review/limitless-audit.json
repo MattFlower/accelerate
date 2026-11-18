@@ -1,0 +1,364 @@
+{
+  "review-078": {
+    "baseTree": "69eba87919e083ba515c0b06e910ee0bf32a87fe",
+    "headTree": "b62909433d7b78be435dbd58b7b7edb99a51efc2",
+    "audit": []
+  },
+  "review-079": {
+    "baseTree": "aeaab5552064eb816549cd7357003e5e958bc4d1",
+    "headTree": "4004a6c0d03448af1824d700148ad75fe98bac26",
+    "audit": []
+  },
+  "review-082": {
+    "baseTree": "0cf41ffb88a56342d9b75221bebe77562dd76776",
+    "headTree": "8ce5b674adb31585fb21978d9f1467625c5c5600",
+    "audit": [
+      {
+        "rule": "binary-content",
+        "severity": "block",
+        "file": "src/git/repos.ts",
+        "detail": "src/git/repos.ts: binary bytes, such as a NUL, hide the content from review. If this is intended, add `Allow: binary` to the request."
+      },
+      {
+        "rule": "binary-content",
+        "severity": "block",
+        "file": "test/git-integrity.test.ts",
+        "detail": "test/git-integrity.test.ts: binary bytes, such as a NUL, hide the content from review. If this is intended, add `Allow: binary` to the request."
+      }
+    ]
+  },
+  "review-097": {
+    "baseTree": "18c03e33c725bdce9427c12ad0d664b9345942e3",
+    "headTree": "3adc3eb2536ebd204bbd9996084cf2fe071ce35d",
+    "audit": []
+  },
+  "review-109": {
+    "baseTree": "c8a99f419e70968e1b7de4b1f90e6c6a44d7cb4c",
+    "headTree": "0aa103c5257aba8693d5659d235d8032aa4c155c",
+    "audit": []
+  },
+  "review-110": {
+    "baseTree": "a53fb8ec7b6eb75bd7b846a08239321988636287",
+    "headTree": "9437d39f0d21f99911e125d24a2430b5ad9f7d43",
+    "audit": []
+  },
+  "review-111": {
+    "baseTree": "b4ede198c6d5299ed3659d406bf5f0c72bd3962b",
+    "headTree": "92a9c6e219762d2ab7282bbae4c6b4f985805950",
+    "audit": []
+  },
+  "review-113": {
+    "baseTree": "a7834b8b64b7c6bfd6802169b67af0757df7d9c1",
+    "headTree": "8f21f1dbe5934ce74dcb5686c6d06233eade6230",
+    "audit": []
+  },
+  "review-115": {
+    "baseTree": "7146499d4a99689e69d10adcdec01f68e1f225db",
+    "headTree": "102f12d0b32e243e6e53d622b8e0e3d34cf746b5",
+    "audit": []
+  },
+  "review-116": {
+    "baseTree": "bdb784201154e212ba31339b022ed11ca71f0bf1",
+    "headTree": "096149af5b4104dbd0a4d169687ca3b2ae74c672",
+    "audit": []
+  },
+  "review-117": {
+    "baseTree": "d7347c08b377d07ceb05b1602657ab14b076e081",
+    "headTree": "7146499d4a99689e69d10adcdec01f68e1f225db",
+    "audit": []
+  },
+  "review-120": {
+    "baseTree": "1327d06973adce4172b3081c067c79ac38ff12aa",
+    "headTree": "bcb978f907f096ea6c473938d6b5357ff1ef9fcc",
+    "audit": []
+  },
+  "review-121": {
+    "baseTree": "21ab09682f5f6353accb64ccba2c01ef8cf79e6a",
+    "headTree": "5065550af59e04f2816f20b8eb94cb92c763b54e",
+    "audit": []
+  },
+  "review-122": {
+    "baseTree": "096149af5b4104dbd0a4d169687ca3b2ae74c672",
+    "headTree": "baec5fa08607df6dd83dc88f67ad8d853ab4f08c",
+    "audit": []
+  },
+  "review-125": {
+    "baseTree": "3a2423954ce0ee52e35b1ae82a7a63262d6f8c50",
+    "headTree": "d7813b15adb53ece6d68e8404eeb53bfbad6ba69",
+    "audit": []
+  },
+  "review-128": {
+    "baseTree": "001450d0e0b78dee20738460642a2348841eb010",
+    "headTree": "3e5ebe79e58fe75ce4df89a0bc82c87dafb15a35",
+    "audit": []
+  },
+  "review-134": {
+    "baseTree": "baec5fa08607df6dd83dc88f67ad8d853ab4f08c",
+    "headTree": "2fb4bb528b0b6ab3d945dcf41faf7f3cb6425aa0",
+    "audit": []
+  },
+  "review-138": {
+    "baseTree": "32234cb4449d7defe3a19982e811c6dc43e4152f",
+    "headTree": "098fcabe815dd6ad3694f69bfedbd5fedf661714",
+    "audit": []
+  },
+  "review-144": {
+    "baseTree": "32234cb4449d7defe3a19982e811c6dc43e4152f",
+    "headTree": "ae1fe265cf91a8c45fce651f3316afcf60bb8a49",
+    "audit": []
+  },
+  "review-145": {
+    "baseTree": "32234cb4449d7defe3a19982e811c6dc43e4152f",
+    "headTree": "29a8ab6381cbb30412716375561ca42e652b87cb",
+    "audit": []
+  },
+  "review-146": {
+    "baseTree": "060e0950485beef9bcc467798aadcf87f16cb0d1",
+    "headTree": "8006376e5e014e57021112f85ff5999f83744777",
+    "audit": []
+  },
+  "review-150": {
+    "baseTree": "25f058b18eb1de1b0d5b1ca8913eb7c3ae869a6e",
+    "headTree": "a1017702c40b620fc130be0237c49a81678a70f2",
+    "audit": []
+  },
+  "review-151": {
+    "baseTree": "609a9493987ead84b276ebe69daa479e0d779887",
+    "headTree": "6d5850260c6fd2a720012020dc230bb75f13c514",
+    "audit": []
+  },
+  "review-152": {
+    "baseTree": "a63882abef91d4dffa75e0fc2b2dac75ad90b08d",
+    "headTree": "bfd429762050e4519f80326190953ef9e3d533bb",
+    "audit": []
+  },
+  "review-153": {
+    "baseTree": "a63882abef91d4dffa75e0fc2b2dac75ad90b08d",
+    "headTree": "46ed0880aa8265bd3b7ca07fe7e145fff781033b",
+    "audit": []
+  },
+  "review-154": {
+    "baseTree": "9bc2bdfaffc0a9eea1ca16357032a5c2177b58a7",
+    "headTree": "12b72fafb39578c3de5b005533179e9221dc820f",
+    "audit": []
+  },
+  "review-155": {
+    "baseTree": "ac1d5eae1b290ef0e7ced88a630f9cc944b0bd25",
+    "headTree": "4bafc5e3cc152f5ced1031aa2c2f2d84f8f4fbe2",
+    "audit": []
+  },
+  "review-156": {
+    "baseTree": "ac1d5eae1b290ef0e7ced88a630f9cc944b0bd25",
+    "headTree": "76847b9971e90d25238cd931d1aec3314f29468e",
+    "audit": []
+  },
+  "review-160": {
+    "baseTree": "7047ee6130185b7af941d8d92e5035a4bf3c3236",
+    "headTree": "9a2c821f42df940e860061458ac57799bc4aa68a",
+    "audit": []
+  },
+  "review-161": {
+    "baseTree": "7047ee6130185b7af941d8d92e5035a4bf3c3236",
+    "headTree": "59af233fe0979ff948a5d77d8ae209c1a1aa38fd",
+    "audit": []
+  },
+  "review-163": {
+    "baseTree": "7047ee6130185b7af941d8d92e5035a4bf3c3236",
+    "headTree": "e7f47d2b08e51d28d8df78b17fd1c548ee581741",
+    "audit": []
+  },
+  "review-166": {
+    "baseTree": "73a4ee85571b27df7d31cee2c9c09dcc78399ac3",
+    "headTree": "a50780036d2a42fe3419cca9403f1f04d90a3773",
+    "audit": []
+  },
+  "review-167": {
+    "baseTree": "bac61e1e8a4c284477b4dd4617bd549d3001e88f",
+    "headTree": "28477d5848961ca222ec9e8ee7cd3f385c8ed0f3",
+    "audit": []
+  },
+  "review-168": {
+    "baseTree": "3a8dd246ec9f5f56e04aaa9266a8af7f06751d47",
+    "headTree": "905d13b2f0af9fa1afb1b2def5a5ebe8c0e216d3",
+    "audit": []
+  },
+  "review-169": {
+    "baseTree": "e81cc69ddceb51f8170a796a44676b72939aa460",
+    "headTree": "13e9e07110e7ae73e8a2274794e775e49716692f",
+    "audit": []
+  },
+  "review-171": {
+    "baseTree": "d8fb2423d91f261f65c78908c4b0912132860bf7",
+    "headTree": "75a94dba14ce7cfc3b9cdb849edb6468ead1a3d7",
+    "audit": []
+  },
+  "review-172": {
+    "baseTree": "d8fb2423d91f261f65c78908c4b0912132860bf7",
+    "headTree": "b5f87cec80b5d230a6ac620cc7a702a04ac76866",
+    "audit": []
+  },
+  "review-173": {
+    "baseTree": "3da28c68fa9f0597b5f5af93e60f1f31bc100b88",
+    "headTree": "6af14f7e576c396dc6ace4a3526e27b0628c1d41",
+    "audit": []
+  },
+  "review-174": {
+    "baseTree": "b520328a352c716564646d071f6231de0f536b97",
+    "headTree": "b0662c7746ad7d2f6b420cac52f4c132e46ed78a",
+    "audit": []
+  },
+  "review-178": {
+    "baseTree": "073cf47802b8125d5e231de7c3546bca1b9ae554",
+    "headTree": "068dc81ea1862fccd143fb3ec10536904aca7fa5",
+    "audit": [
+      {
+        "rule": "ci-config",
+        "severity": "block",
+        "file": ".github/workflows/ci.yml",
+        "detail": "CI workflow changed. If this is intended, add `Allow: workflows` to the request."
+      }
+    ]
+  },
+  "review-179": {
+    "baseTree": "cd0f2e75c789ef5f5df4a4aa34b3ec01cb045d00",
+    "headTree": "82923e27feb987c3f3395501c85c56ca637a46f8",
+    "audit": []
+  },
+  "review-181": {
+    "baseTree": "9a09e1d0401b12e3cf94a3a9ec19eca82ccf4a9f",
+    "headTree": "9df27f9847383070520c7d6b4c7c5890cd6de40a",
+    "audit": []
+  },
+  "review-186": {
+    "baseTree": "ca4c9454141ddfe47d7cce9ec5ac3d9e773bfd93",
+    "headTree": "5ce56c13a48a786ba022f87fdebda64386471272",
+    "audit": []
+  },
+  "review-189": {
+    "baseTree": "d2b394d4c9c635181b9276475d9dac12f7f1eb8e",
+    "headTree": "f10bdf88f37857b2a8cebd44fae02aa4972817ec",
+    "audit": []
+  },
+  "review-195": {
+    "baseTree": "7876780b338da918737f96349fdde93d7d4b6b48",
+    "headTree": "749affadd2b9e73cfcd8a1b52186b030a68830fa",
+    "audit": []
+  },
+  "review-200": {
+    "baseTree": "08e1decd7d7400da7faff12258fc328c4e007cd6",
+    "headTree": "aaa5811b791748d52c5a421c76ee7e336407ccf9",
+    "audit": []
+  },
+  "review-201": {
+    "baseTree": "f2ae73e019314b7caa29e5b94538cc00a7197561",
+    "headTree": "66fffa2278a89fd53941ca92ce03598f3f414f4b",
+    "audit": []
+  },
+  "review-204": {
+    "baseTree": "a311b66960c4c069432567f55460d3792bb31e8e",
+    "headTree": "9d3c8c9d90414f82232d330ba095db9be67225ea",
+    "audit": []
+  },
+  "review-207": {
+    "baseTree": "17cee9e37a226f67cc93664bb94566036cbf0233",
+    "headTree": "3b6042fc0e321bf2c3ed14633fdcd0643880bbb6",
+    "audit": []
+  },
+  "review-210": {
+    "baseTree": "c584e5cb2e7308b3adc21df8e637f7f1bf75fb3b",
+    "headTree": "52dca8f1fe6df85ad86ecc8ca59856870908ae17",
+    "audit": []
+  },
+  "review-214": {
+    "baseTree": "d4e6f555b3567e565ee30e71d649ab70eb89135e",
+    "headTree": "7bafda39a75feaaf81fb7a3ca92df773f6b501da",
+    "audit": []
+  },
+  "review-215": {
+    "baseTree": "7a54102674d1f10b5ddfcbfb6733ff3ee11b54f4",
+    "headTree": "519cd53a0988b12094e7103ad3fe4326d25d66a4",
+    "audit": []
+  },
+  "review-216": {
+    "baseTree": "ad9581cdad28baad4ee88253ca00ce4362d1e471",
+    "headTree": "3f3b628e818562dff7ef74c9d2df3e7f74179995",
+    "audit": []
+  },
+  "review-217": {
+    "baseTree": "bbbcec04e604da8323beddf0945e94620e75ec1d",
+    "headTree": "0bb18db5497492fabd7c4aad182dc1a379bb2eb3",
+    "audit": [
+      {
+        "rule": "protected-path",
+        "severity": "warn",
+        "file": "test/fixtures/claude-authentication.jsonl",
+        "detail": "Added a file under a protected path."
+      }
+    ]
+  },
+  "review-218": {
+    "baseTree": "c96c2a80643a53c7f54d098a2d1f49896e17132e",
+    "headTree": "7fb0d95eafaa5d2ed9b3135d6c08eb234a0f7677",
+    "audit": []
+  },
+  "review-219": {
+    "baseTree": "44c4ef1edda97be58ec45ce48cf52e3304fa826d",
+    "headTree": "ce75fd6c9c72176cc90009aa2cf6a056d685e8e3",
+    "audit": []
+  },
+  "review-224": {
+    "baseTree": "59b372dd6a8449bd98a2ed92f4231e1a7a51013f",
+    "headTree": "1feccfe9fd60016e2c21ee11fbf0a47a65802099",
+    "audit": []
+  },
+  "review-226": {
+    "baseTree": "59b372dd6a8449bd98a2ed92f4231e1a7a51013f",
+    "headTree": "ce55b40d4af041c5ccf0f894280b63f0d54e2694",
+    "audit": []
+  },
+  "review-227": {
+    "baseTree": "8e369da86ea691ddbad45bf284914eb73a7ae243",
+    "headTree": "e3b3bfff8801fc7748cd2d8e42cd9b18b91af375",
+    "audit": []
+  },
+  "review-232": {
+    "baseTree": "5b1a1b02657b97776734cef8f89ff9ed9e6ac64a",
+    "headTree": "1e878398980a1c8d0e96231ba8c5a5ff4f4c9632",
+    "audit": []
+  },
+  "review-234": {
+    "baseTree": "b82bd1e5d62e5c5e30798abd317a1101c7067490",
+    "headTree": "cb85b763902eb2b4d8d8680cd34f0c9865ae5f7e",
+    "audit": []
+  },
+  "review-235": {
+    "baseTree": "d66256e3c36ad5f00c9efdb2ebdebf6bf4933a4a",
+    "headTree": "226573e2ba668c2db7e878d7375654668239e5d3",
+    "audit": []
+  },
+  "review-237": {
+    "baseTree": "54c0a5237230699f61bf727d7b3ca64cbde2ae60",
+    "headTree": "2cefd268a7e75c6b7478ebd8f6dc259cb9dc16c2",
+    "audit": []
+  },
+  "review-238": {
+    "baseTree": "82bb4182de0e53ba4f866375e2ed52d8ce1a0eae",
+    "headTree": "96a2612fa98f5fcb5a6ef2fa0b9fde2f03db505a",
+    "audit": []
+  },
+  "review-239": {
+    "baseTree": "5a2daa80c503939094d8d1138564cc307bad8c64",
+    "headTree": "f1bf1440212d8eb4a7fc3d5eadccadcbbfec5629",
+    "audit": []
+  },
+  "review-240": {
+    "baseTree": "da057b28917104415e29d5e40300bd53e2ad424a",
+    "headTree": "5ec6a986e5ddd3d9739346b10587e006b7a4f934",
+    "audit": []
+  },
+  "review-241": {
+    "baseTree": "7722f773debfbe4e2508f7b345fdd2018cf9cb8a",
+    "headTree": "56b89c4e3714f8138e0b2df4fc8d9b97748e0c59",
+    "audit": []
+  }
+}

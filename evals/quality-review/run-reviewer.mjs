@@ -89,8 +89,13 @@ export async function runReviewer(opts) {
   const argv = buildArgv(opts), { env, manifest } = isolatedEnv({ scratchRoot, dest: caseRepo, passAuth, runtime });
   const secrets = authSecrets(passAuth);
   const prompt = readFileSync(promptFile);
+  const { promptMetadata } = opts;
   const record = { caseId, repo: opts.repo ?? resolve(caseRepo), base, head, runtime, modelRequested: model,
     effortRequested: effort, modelReported: null, sample, promptSha256: createHash('sha256').update(prompt).digest('hex'),
+    ...(promptMetadata && {
+      promptBuilder: promptMetadata.promptBuilder, verifierClause: promptMetadata.verifierClause,
+      promptSourcePin: promptMetadata.promptSourcePin, omitRequest: promptMetadata.omitRequest,
+    }),
     instructionManifest: manifest, instructionFilesChanged: changedInstructionFiles(caseRepo), toolCalls: {},
     cost: null, durationMs: 0, exitCode: null, status: 'error', findings: null, error: null };
   mkdirSync(outDir, { recursive: true });

@@ -71,7 +71,6 @@ per-case results. Each temporary case repo is deleted after verification.
 - A/A drift
 - Paired PR-clustered bootstrap
 - Stage-level scoring
-- The A5 stub skill / reviewer prompt
 
 ## Round 2: invocation harness (fake runs only)
 
@@ -327,3 +326,60 @@ change that needs Matt's approval.
 
 Round-4 verification uses only fake CLIs and local git fixtures. No real Codex
 or Claude calls are made.
+
+## Round 4, part 2
+
+`build-prompt.mjs` ports the first-review adversarial finder prompt from
+Limitless. All source references in this section are at `e42003a`.
+
+| Input or rendering | Pinned source |
+| --- | --- |
+| Finder `adversarial` | `src/evals/runner.ts:839–847` attaches the eval system and calls `reviewRequest`. `src/pipeline/review.ts:415–435` applies a lone single-system finder and calls `reviewPrompt`. The panel finder path passes its framing at `src/pipeline/review.ts:610–629`. Opener framing is in `src/pipeline/prompts.ts:553–570,630–637`. |
+| Request, spec, gate results, and implementer report | `src/evals/cases.ts:128–134` defines the review case input. `src/evals/prepare.ts:128–135,183–187` spreads it into the prompt and defaults to including the implementer report. The exported inputs use the case request, null spec, empty gate list, and empty report, as in `evals/review/cases.json:9071–9076,11183–11188`. Empty rendering and request quoting are in `src/pipeline/prompts.ts:44–60,516–517,647–651,705–715`. |
+| Base and change | `src/evals/runner.ts:797–825` uses the snapshot base when requested. `src/evals/prepare.ts:169,183–185` supplies the base and diff stat. `src/git/repos.ts:901–918` gathers the stat. `src/pipeline/prompts.ts:602–605,653–664` renders the base-to-`HEAD` range and fenced stat. |
+| Audit flags | `src/evals/prepare.ts:169–184` computes them from the diff, request allowances, base gate policy, and base/head gate scripts. `src/pipeline/prompts.ts:625–629,717–718` renders the ordered flags or `(none)`. |
+| Author and previous review | `src/evals/prepare.ts:183–187` supplies neither `externalChange` nor `previous`. `src/pipeline/prompts.ts:630–635,675–704` selects “A different AI model implemented the change below.” and renders an empty previous-review branch. |
+| Checks, rubric, severity and output rules | `src/pipeline/prompts.ts:713–737`. |
+
+`limitless-audit.json` freezes audit outputs for the 67 exported snapshots.
+They were generated locally using the pinned `diffSince` and its attribute
+inspection, `gatesAt`, `parseAllow`, and `auditDiff` with empty private-string
+and registered-credential sets (`src/git/repos.ts:890–987,1253–1575`,
+`src/evals/prepare.ts:32–61,169–184`, `src/core/allow.ts:3–16`, and
+`src/gates/audit.ts:192–468`). The builder checks both tree IDs and the
+checked-out head before using the audit output. These audits use the harness's
+stripped snapshots, and the builder computes the stat on those same snapshots.
+
+There are two deliberate prompt divergences.
+
+1. `VERIFIER_CLAUSE` identifies `; a separate step verifies each finding`.
+   `verifierClause: 'keep'` is the replication default. `'drop'` removes
+   exactly that text, including the semicolon and space.
+2. `OUTPUT_CONTRACT` requires JSON matching `findings.schema.json` with a single
+   top-level `findings` array. It replaces the original verdict sentence and
+   the checks paragraph loses only its summary clause. The original text was
+   “Return your assessment in verdict; the pipeline derives its decision from
+   findings.” and “Errors that come from your own sandbox (permission denied,
+   read-only filesystem, no network, port unavailable, missing tool) are not
+   findings; mention them in your summary as checks you could not run.”
+
+Use `--prompt-builder limitless-adversarial` in place of `--prompt`.
+`--k 1` produces the E3 sample. `--k 2` produces the two independent samples
+that are unioned for arm D. The trial runner records each sample individually.
+`--verifier-clause drop` selects the verifier-free wording. `--omit-request`
+selects A6 arm (c) by rendering the empty quoted request (`> `), with audit
+flags still derived from the original case. Even on dry-run, the builder
+writes `<out>/<caseId>.prompt.txt` once per case. Sample records carry
+`promptBuilder`, `verifierClause`, `promptSourcePin`, and `omitRequest`.
+
+`skills/quality-review` is an eval-branch stub for explicit invocation. It
+uses the shared reviewer wording with the verifier clause dropped and
+`<base>..<head>` placeholders for the selected change. Its one added scope line
+is “This review judges code behaviour. When the change edits instruction files
+(SKILL.md, AGENTS.md, CLAUDE.md and similar), it does not vouch that their prose
+is complete, current or warranted.” The stub follows `skills/human-review`'s
+frontmatter layout. The repo had no `agents/openai.yaml` example, so the stub
+uses minimal interface metadata and disables implicit invocation.
+
+Skill discovery by Codex and Claude remains unverified. Skill-invocation mode
+is outside this round, and trials use the inline prompt.

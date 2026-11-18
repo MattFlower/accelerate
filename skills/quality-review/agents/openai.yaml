@@ -1,0 +1,5 @@
+interface:
+  display_name: "Quality Review"
+  short_description: "Review a branch or range for real defects"
+policy:
+  allow_implicit_invocation: false
