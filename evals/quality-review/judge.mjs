@@ -136,6 +136,15 @@ export function wilson(passed, total) {
 }
 const rate = (numerator, denominator) => ({ numerator, denominator, rate: denominator ? numerator / denominator : null, ci: wilson(numerator, denominator) });
 // judge.ts:116–169; do not change mapping/caught rules without scoring approval.
+export function* requiredGoldDecisions(item, output, matches) {
+  for (const [i, gold] of item.defects.entries()) {
+    if (!gold.required) continue;
+    const id = `G${i + 1}`;
+    const mapped = matches.map(m => m.find(m => m.gold === id)?.finding);
+    const decisions = mapped.map(id => Boolean(id && isBlocking(output.findings[Number(id.slice(1)) - 1])));
+    yield { id, mapped, decisions, caught: decisions.every(Boolean) };
+  }
+}
 export function judgedMetrics(trials, cases, judges, cacheDir, secrets = []) {
   if (judges.length !== 2) throw new Error('exactly two judges are required');
   let total = 0, agreed = 0, caught = 0, contested = 0, underRated = 0, unjudged = 0;
@@ -143,14 +152,11 @@ export function judgedMetrics(trials, cases, judges, cacheDir, secrets = []) {
   for (const { item, output } of judgingTrials(trials, cases)) {
     const matches = judges.map(j => cachedJudgment(cacheDir, j, item, output, secrets)?.matches);
     if (matches.some(m => !m)) { unjudged++; continue; }
-    for (const [i, gold] of item.defects.entries()) {
-      if (!gold.required) continue;
+    for (const { mapped, decisions, caught: goldCaught } of requiredGoldDecisions(item, output, matches)) {
       total++;
-      const mapped = matches.map(m => m.find(m => m.gold === `G${i + 1}`)?.finding);
       if (mapped.every(Boolean) || mapped.every(id => !id)) agreed++;
-      const decisions = mapped.map(id => Boolean(id && isBlocking(output.findings[Number(id.slice(1)) - 1])));
       decisions.forEach((yes, j) => { if (yes) counts[j]++; });
-      if (decisions.every(Boolean)) caught++;
+      if (goldCaught) caught++;
       else if (decisions.some(Boolean)) contested++;
       else if (mapped.every(Boolean)) underRated++;
     }

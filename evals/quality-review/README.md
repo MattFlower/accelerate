@@ -407,3 +407,34 @@ Known gaps in the stub skill:
 
 Skill discovery by Codex and Claude remains unverified. Skill-invocation mode
 is outside this round, and trials use the inline prompt.
+
+## Sample overlap (A2 independence check)
+
+```sh
+node evals/quality-review/sample-overlap.mjs --trials <dir> \
+  --judge codex:<model> --judge claude:<model> --cache <dir> --out <file>
+```
+
+Use the same two judge targets and cache as the judged run. The script reads
+`<dir>/trials.jsonl` and accepts `--cases <file>` (defaults to the harness's
+`cases.json`). It makes zero model calls. It groups records by case, runtime,
+requested model and effort, and prompt hash (or recorded builder identity).
+Groups without exactly one successful sample 1 and one successful sample 2
+are counted as incomplete.
+
+The report checks exact findings equality with sorted object keys and preserved
+array order. It also compares all findings and blocking findings using Limitless
+`sameClaim` (merge rules v2, `src/pipeline/panel-merge.ts` at `e42003a`). The two
+samples supply distinct finder identities. The findings schema has no `label`
+field, so labels compare equal, and eval cases have no prior findings, so both
+citations are undefined. The symmetric overlap uses greedy one-to-one matches
+in canonical order. Two empty sets have `null` overlap and are excluded from the
+mean and median. The summary counts them as `emptyPairs` separately for all
+findings and blocking findings.
+
+Successful trials without both cached judgments count as unjudged, including
+clean trials, which the judge skips. Gold buckets and recall use pairs with two
+fully judged samples and count only required defects. Both judges must map a
+defect to a blocking finding for that sample to catch it. `unionOfJudgments` is
+report-only bookkeeping for the union of per-sample judgments. Limitless arm D
+scores a separately judged merged report.
