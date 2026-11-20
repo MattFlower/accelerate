@@ -6,6 +6,7 @@ export const PROMPT_SOURCE_PIN = 'e42003a';
 export const DEFAULT_VERIFIER_CLAUSE = 'keep';
 export const VERIFIER_CLAUSE = '; a separate step verifies each finding';
 export const OUTPUT_CONTRACT = 'Return JSON matching findings.schema.json, with a single top-level findings array.';
+const DROPPED_PARAGRAPH = "Also return `dropped`: every candidate problem you investigated and ruled out, each with `why_dropped` and `evidence`. `evidence` is the `path:line` locations that show it cannot happen; write an empty string if you have no code proof. Return an empty list if you ruled nothing out.";
 export const ORIGINAL_SUMMARY_CLAUSE = '; mention them in your summary as checks you could not run';
 export const ORIGINAL_VERDICT_RULE = "Return your assessment in verdict; the pipeline derives its decision from findings.";
 
@@ -64,7 +65,8 @@ export function quoteRequest(prompt) {
 
 const audits = JSON.parse(readFileSync(new URL('./limitless-audit.json', import.meta.url), 'utf8'));
 
-export function buildPrompt(entry, { caseRepo, base, head, verifierClause = DEFAULT_VERIFIER_CLAUSE, omitRequest = false }) {
+export function buildPrompt(entry, { caseRepo, base, head, verifierClause = DEFAULT_VERIFIER_CLAUSE, omitRequest = false, droppedField = 'off' }) {
+  if (!['on', 'off'].includes(droppedField)) throw new Error('Invalid droppedField');
   if (!['keep', 'drop'].includes(verifierClause)) throw new Error('Invalid verifierClause');
   const { prompt, spec, implementerReport, gates } = entry.input;
   if (spec !== null || implementerReport !== '' || gates.length !== 0)
@@ -83,6 +85,9 @@ export function buildPrompt(entry, { caseRepo, base, head, verifierClause = DEFA
   const warnings = pinned.audit.length
     ? pinned.audit.map((f) => `- [${f.rule}/${f.severity}] ${f.file ? `${f.file}: ` : ""}${f.detail}`).join("\n")
     : empty.audit;
+  const outputContract = droppedField === 'on'
+    ? OUTPUT_CONTRACT.replace('findings.schema.json', 'findings-dropped.schema.json') + '\n\n' + DROPPED_PARAGRAPH
+    : OUTPUT_CONTRACT;
   return `${opener(verifierClause)}
 
 ${sections.request}
@@ -111,5 +116,5 @@ ${sections.rubric}
 ${RUBRIC}
 
 ${FINDING_RULES}
-${OUTPUT_CONTRACT}`;
+${outputContract}`;
 }

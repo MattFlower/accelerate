@@ -438,3 +438,29 @@ fully judged samples and count only required defects. Both judges must map a
 defect to a blocking finding for that sample to catch it. `unionOfJudgments` is
 report-only bookkeeping for the union of per-sample judgments. Limitless arm D
 scores a separately judged merged report.
+
+### Models observed (sub-call logging)
+
+Trial records include `modelsObserved` with event counts and reported costs in USD for
+each model. Claude includes init and usage-only models with zero assistant events.
+Codex counts top-level and item model fields. A missing per-model cost is null.
+`extraModels` flags any observed name that differs exactly from `modelReported`.
+Run `node evals/quality-review/models-report.mjs --trials <dir>` to group trials
+by requested model and sorted observed names and count trials flagged for extra models.
+
+### Dropped candidates arm (A12, default off)
+
+Use `run-trials.mjs --prompt-builder limitless-adversarial --dropped-field on`
+to request and retain dropped candidates with their evidence. The default leaves
+the prompt and findings schema unchanged and omits the arm metadata.
+Run `node evals/quality-review/dropped-report.mjs --trials <dir>` for per-trial
+counts and aggregates from successful on-arm trials. Evidence with a `path:line`
+match is referenced, other non-empty evidence is prose-only, and evidence that
+is blank after trimming is empty. Prose-only and empty evidence both count
+toward `shareWithoutCodeProof`.
+
+The `dropped` list is self-reported and undercounts. In Rocchia (2611.23274),
+70–71% of residue records said nothing remained open. Transcripts remain the
+primary source for A12 step 1. A ruling step should look first at dismissals
+without code proof (the Sashiko rule). The report uses zero model calls and omits
+gold matching, which would require judge calls.

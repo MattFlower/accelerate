@@ -13,7 +13,7 @@ export async function main(args) {
   for (let i = 0; i < args.length; i++) {
     const key = args[i].replace(/^--/, '');
     if (['dry-run', 'confirm-spend', 'pass-auth', 'omit-request'].includes(key)) opts[key] = true;
-    else if (['cases', 'limitless', 'runtime', 'model', 'effort', 'prompt', 'prompt-builder', 'verifier-clause', 'k', 'out', 'case', 'max-calls'].includes(key) && args[i + 1] && !args[i + 1].startsWith('--')) {
+    else if (['cases', 'limitless', 'runtime', 'model', 'effort', 'prompt', 'prompt-builder', 'verifier-clause', 'dropped-field', 'k', 'out', 'case', 'max-calls'].includes(key) && args[i + 1] && !args[i + 1].startsWith('--')) {
       const value = args[++i]; if (key === 'case') opts.case.push(value); else opts[key] = value;
     } else throw new Error(`Invalid argument: ${args[i]}`);
   }
@@ -22,6 +22,9 @@ export async function main(args) {
   for (const key of ['cases', 'limitless', 'runtime', 'model', 'effort', 'k', 'out']) if (!opts[key]) throw new Error(`Required: --${key}`);
   const promptBuilder = opts['prompt-builder'];
   const verifierClause = opts['verifier-clause'] ?? DEFAULT_VERIFIER_CLAUSE;
+  const droppedField = opts['dropped-field'] ?? 'off';
+  if (!['on', 'off'].includes(droppedField)) throw new Error('Invalid --dropped-field');
+  if (droppedField === 'on' && !promptBuilder) throw new Error('--dropped-field on requires --prompt-builder');
   const omitRequest = Boolean(opts['omit-request']);
   if (Boolean(opts.prompt) === Boolean(promptBuilder)) throw new Error('Specify exactly one of --prompt and --prompt-builder');
   if (promptBuilder && promptBuilder !== PROMPT_BUILDER) throw new Error('Invalid --prompt-builder');
@@ -40,7 +43,10 @@ export async function main(args) {
   requireAuth(opts['pass-auth'], opts.runtime);
   const budget = planCalls(cases.length * k, opts['max-calls'], opts['dry-run']);
   const outDir = resolve(opts.out);
-  const promptMetadata = promptBuilder ? { promptBuilder, verifierClause, promptSourcePin: PROMPT_SOURCE_PIN, omitRequest } : undefined;
+  const promptMetadata = promptBuilder ? {
+    promptBuilder, verifierClause, promptSourcePin: PROMPT_SOURCE_PIN, omitRequest,
+    ...(droppedField === 'on' && { droppedField }),
+  } : undefined;
   mkdirSync(outDir, { recursive: true });
   for (const entry of cases) {
     const root = mkdtempSync(join(tmpdir(), 'qr-trials-'));
@@ -48,7 +54,7 @@ export async function main(args) {
       const caseRepo = join(root, 'case');
       const expectedShas = buildCaseRepo({ sourceRepo: resolve(opts.limitless), base: entry.base, head: entry.head, dest: caseRepo, runtime: opts.runtime, passAuth: opts['pass-auth'] });
       const promptFile = promptBuilder ? join(outDir, `${entry.id}.prompt.txt`) : resolve(opts.prompt);
-      if (promptBuilder) writeFileSync(promptFile, buildPrompt(entry, { caseRepo, ...expectedShas, verifierClause, omitRequest }));
+      if (promptBuilder) writeFileSync(promptFile, buildPrompt(entry, { caseRepo, ...expectedShas, verifierClause, omitRequest, droppedField }));
       for (let sample = 1; sample <= k; sample++) {
         const trial = { caseId: entry.id, repo: entry.repo, caseRepo, expectedShas, runtime: opts.runtime,
           model: opts.model, effort: opts.effort, promptFile, sample, outDir, scratchRoot: root, budget, passAuth: opts['pass-auth'], promptMetadata };

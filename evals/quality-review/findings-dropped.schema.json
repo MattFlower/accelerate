@@ -1,0 +1,112 @@
+{
+  "$comment": "Ported from limitless e42003a src/pipeline/schemas.ts:116–153. Finding fields only; wrapper intentionally findings-only. Confidence clamp is applied by the validator, mirroring lines 133–136.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "findings",
+    "dropped"
+  ],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file",
+          "title",
+          "detail",
+          "suggestion",
+          "failure_scenario",
+          "severity",
+          "security",
+          "line",
+          "category",
+          "confidence",
+          "introduced_by_diff"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "suggestion": {
+            "type": "string"
+          },
+          "failure_scenario": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "blocker",
+              "major",
+              "minor",
+              "nit"
+            ]
+          },
+          "security": {
+            "type": "boolean"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "category": {
+            "enum": [
+              "correctness",
+              "security",
+              "reliability",
+              "data",
+              "concurrency",
+              "compatibility",
+              "test-gap",
+              "cleanup",
+              "conventions"
+            ]
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "introduced_by_diff": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "dropped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file",
+          "line",
+          "title",
+          "why_dropped",
+          "evidence"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "why_dropped": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

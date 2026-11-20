@@ -24,6 +24,7 @@ function fixture(t) {
   const promptFile = join(root, 'prompt'); writeFileSync(promptFile, Buffer.from('exact prompt\r\n\u00e9\n\0'));
   return { budget: callBudget(10), root, source, base, head, caseRepo, expectedShas, promptFile, caseId: 'test-1', model: 'fake-model', effort: 'high', sample: 1, outDir: join(root, 'out'), scratchRoot: root };
 }
+const dismissal = { file: 'x', line: 1, title: 'Resolved', why_dropped: 'Guard rejects it', evidence: 'x:2' };
 function fake(opts, runtime, mode) {
   const bin = join(opts.root, runtime), marker = join(opts.root, 'received.json');
   writeFileSync(bin, `#!${process.execPath}
@@ -34,6 +35,7 @@ const emit = e => console.log(JSON.stringify(e));
 const runtime=${JSON.stringify(runtime)}, mode=${JSON.stringify(mode)};
 if(mode==='hang') { setInterval(()=>{},1000); } else {
 const output=mode==='invalid'?{findings:[{severity:'critical'}]}:mode==='finding'?{findings:[${JSON.stringify(finding)}]}:{findings:[]};
+if(mode==='dropped') output.dropped = [${JSON.stringify(dismissal)}];
 if(runtime==='codex') {
 emit({type:'thread.started',thread_id:'t'});
 for(const phase of ['item.started','item.completed']) emit({type:phase,item:{id:'s1',type:'command_execution',command:'git diff'}});
@@ -223,4 +225,81 @@ test('direct reviewer refuses an uncapped call before spawning', async t => {
   const f = fixture(t), { bin, marker } = fake(f, 'codex', 'empty');
   await assert.rejects(runReviewer({ ...f, runtime: 'codex', bin, budget: undefined }), /max-calls/);
   assert.equal(existsSync(marker), false);
+});
+
+test('Claude observes init, assistants including helpers, and sums model usage costs', () => {
+  const parsed = parseTranscript(`{"type":"system","subtype":"init","model":"A"}
+{"type":"assistant","message":{"model":"A"}}
+{"type":"assistant","parent_tool_use_id":"helper","message":{"model":"B"}}
+{"type":"result","modelUsage":{"A":{"costUSD":0.5},"B":{"costUSD":0.2},"usage-only":{"costUSD":0}}}
+{"type":"result","modelUsage":{"A":{"costUSD":0.25}}}`, 'claude');
+  assert.equal(parsed.modelReported, 'A');
+  assert.deepEqual(parsed.modelsObserved, {
+    A: { events: 1, costUsd: 0.75 }, B: { events: 1, costUsd: 0.2 },
+    'usage-only': { events: 0, costUsd: 0 },
+  });
+  assert.equal(parsed.extraModels, true);
+});
+
+test('Claude tolerates malformed usage and counts an init-only model', () => {
+  const parsed = parseTranscript(`{"type":"system","subtype":"init","model":"A"}
+{"type":"assistant","message":{"content":[null]}}
+{"type":"result","modelUsage":"invalid"}
+{"type":"result","modelUsage":[null]}
+{"type":"result","modelUsage":{"A":null}}
+{"type":"result","modelUsage":{"A":{"costUSD":"invalid"}}}`, 'claude');
+  assert.deepEqual(parsed.modelsObserved, { A: { events: 0, costUsd: null } });
+  assert.equal(parsed.extraModels, false);
+  const single = parseTranscript(`{"type":"system","subtype":"init","model":"A"}
+{"type":"assistant","message":{"model":"A"}}`, 'claude');
+  assert.deepEqual(single.modelsObserved, { A: { events: 1, costUsd: null } });
+  assert.equal(single.extraModels, false);
+});
+
+test('Codex counts each model field and preserves top-level reporting', () => {
+  const missing = parseTranscript('{"type":"thread.started"}', 'codex');
+  assert.deepEqual(missing.modelsObserved, {});
+  assert.equal(missing.extraModels, false);
+  const parsed = parseTranscript(`{"type":"thread.started","model":"A"}
+{"type":"item.started","model":"A","item":{"model":"A"}}
+{"type":"item.completed","item":{"model":"B"}}`, 'codex');
+  assert.equal(parsed.modelReported, 'A');
+  assert.deepEqual(parsed.modelsObserved, { A: { events: 3, costUsd: null }, B: { events: 1, costUsd: null } });
+  assert.equal(parsed.extraModels, true);
+});
+
+test('off preserves both CLI schema arguments and on selects the extended schema', () => {
+  const schemaUrl = new URL('../findings.schema.json', import.meta.url);
+  const original = readFileSync(schemaUrl);
+  const extended = readFileSync(new URL('../findings-dropped.schema.json', import.meta.url));
+  for (const runtime of ['codex', 'claude']) {
+    const opts = { runtime, caseRepo: '/tmp/case', model: 'm', effort: 'high' };
+    const base = buildArgv(opts);
+    const off = buildArgv({ ...opts, promptMetadata: { droppedField: 'off' } });
+    const on = buildArgv({ ...opts, promptMetadata: { droppedField: 'on' } });
+    assert.deepEqual(off, base);
+    if (runtime === 'codex') {
+      const pathArg = base.indexOf('--output-schema') + 1;
+      assert.deepEqual(readFileSync(off[pathArg]), original);
+      assert.deepEqual(readFileSync(on[pathArg]), extended);
+    } else {
+      assert.equal(off.at(-1), JSON.stringify(JSON.parse(original)));
+      assert.equal(on.at(-1), JSON.stringify(JSON.parse(extended)));
+    }
+  }
+});
+
+test('reviewer validates and retains dropped candidates only in the on arm', async t => {
+  assert.throws(() => validateFindings({ findings: [], dropped: [dismissal] }), /Unknown review.dropped/);
+  assert.throws(() => validateFindings({ findings: [] }, 'on'), /Missing review.dropped/);
+  assert.throws(() => validateFindings({ findings: [], dropped: [{ ...dismissal, line: '1' }] }, 'on'), /Invalid type/);
+  const f = fixture(t), runtime = 'claude';
+  const { bin } = fake(f, runtime, 'dropped');
+  const result = await runReviewer({ ...f, runtime, bin, promptMetadata: { droppedField: 'on' } });
+  assert.equal(result.status, 'ok', result.error);
+  assert.equal(result.droppedField, 'on');
+  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.dropped, [dismissal]);
+  assert.deepEqual(result.modelsObserved, { 'reported-model': { events: 0, costUsd: null } });
+  assert.equal(result.extraModels, false);
 });

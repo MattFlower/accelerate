@@ -9,21 +9,25 @@ import { isolatedEnv, changedInstructionFiles, authSecrets, redact } from './iso
 
 export const schemaPath = fileURLToPath(new URL('./findings.schema.json', import.meta.url));
 const schema = JSON.parse(readFileSync(schemaPath));
-export function buildArgv({ runtime, caseRepo, model, effort }) {
+const droppedSchemaPath = fileURLToPath(new URL('./findings-dropped.schema.json', import.meta.url));
+const droppedSchema = JSON.parse(readFileSync(droppedSchemaPath));
+
+export function buildArgv({ runtime, caseRepo, model, effort, promptMetadata }) {
+  const dropped = promptMetadata?.droppedField === 'on';
   if (runtime === 'codex') return ['exec', '--json', '--skip-git-repo-check', '-C', resolve(caseRepo), '-m', model,
     '-c', 'approval_policy="never"', '-c', `model_reasoning_effort=${JSON.stringify(effort)}`,
     '--ignore-user-config', '--strict-config', '-s', 'read-only', '-c', 'orchestrator.mcp.enabled=false',
     '--disable', 'apps', '--disable', 'plugins', '--disable', 'multi_agent', '--disable', 'code_mode',
-    '-c', 'web_search="disabled"', '--output-schema', schemaPath, '-'];
+    '-c', 'web_search="disabled"', '--output-schema', dropped ? droppedSchemaPath : schemaPath, '-'];
   if (runtime === 'claude') return ['-p', '--output-format', 'stream-json', '--verbose', '--model', model,
     '--setting-sources', '', '--permission-mode', 'dontAsk', '--tools', 'Read,Grep,Glob,Bash',
     '--allowedTools', 'Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git status:*)',
     '--disallowedTools', 'Bash(git diff --output:*)', 'Bash(git diff --output=*)',
     'Bash(git log --output:*)', 'Bash(git log --output=*)', 'Bash(git show --output:*)', 'Bash(git show --output=*)',
-    '--effort', effort, '--json-schema', JSON.stringify(schema)];
+    '--effort', effort, '--json-schema', JSON.stringify(dropped ? droppedSchema : schema)];
   throw new Error(`Unknown runtime: ${runtime}`);
 }
-export function validateFindings(value) {
+export function validateFindings(value, droppedField = 'off') {
   function check(v, s, path) {
     if (s.enum && !s.enum.includes(v)) throw new Error(`Invalid enum at ${path}`);
     if (s.type === 'object') {
@@ -40,12 +44,20 @@ export function validateFindings(value) {
       throw new Error(`Invalid type at ${path}`);
     }
   }
-  check(value, schema, 'review');
+  check(value, droppedField === 'on' ? droppedSchema : schema, 'review');
   // limitless src/pipeline/schemas.ts:133–136 clamps confidence after parsing.
   return value.findings.map(f => ({ ...f, confidence: Math.min(1, Math.max(0, f.confidence)) }));
 }
 export function parseTranscript(stdout, runtime) {
   const toolCalls = {}, seen = new Set();
+  const models = new Map();
+  function observe(model, events, costUsd) {
+    if (typeof model !== 'string') return;
+    const usage = models.get(model) ?? { events: 0, costUsd: null };
+    usage.events += events;
+    if (Number.isFinite(costUsd)) usage.costUsd = (usage.costUsd ?? 0) + costUsd;
+    models.set(model, usage);
+  }
   let final, modelReported = null, error = null, cost = null;
   const count = (id, name) => { const key = `${name}:${id}`; if (!seen.has(key)) { seen.add(key); toolCalls[name] = (toolCalls[name] ?? 0) + 1; } };
   for (const line of stdout.split('\n').filter(s => s.trim())) {
@@ -53,6 +65,8 @@ export function parseTranscript(stdout, runtime) {
     if (!e || typeof e !== 'object') { error = 'Invalid transcript event'; continue; }
     if (runtime === 'codex') {
       if (typeof e.model === 'string') modelReported = e.model;
+      observe(e.model, 1);
+      observe(e.item?.model, 1);
       if (e.type === 'error' || e.type === 'turn.failed') error = e.message ?? e.error?.message ?? 'Reviewer failed';
       if (['item.started', 'item.completed'].includes(e.type) && e.item) {
         const i = e.item;
@@ -62,22 +76,35 @@ export function parseTranscript(stdout, runtime) {
         if (e.type === 'item.completed' && i.type === 'agent_message') final = i.text;
       }
     } else {
-      if (e.type === 'system' && e.subtype === 'init' && typeof e.model === 'string') modelReported = e.model;
-      if (e.type === 'assistant') for (const b of e.message?.content ?? []) if (b.type === 'tool_use') {
-        count(b.id, b.name);
-        if (b.name === 'Bash' && typeof b.input?.command === 'string') {
-          const words = b.input.command.trim().split(/\s+/).slice(0, 2).join(' ');
-          if (words) count(b.id, `Bash:${words}`);
+      if (e.type === 'system' && e.subtype === 'init' && typeof e.model === 'string') {
+        modelReported = e.model;
+        observe(e.model, 0);
+      }
+      if (e.type === 'assistant') {
+        observe(e.message?.model, 1);
+        const content = e.message?.content;
+        for (const b of Array.isArray(content) ? content : []) {
+          if (b?.type !== 'tool_use') continue;
+          count(b.id, b.name);
+          if (b.name === 'Bash' && typeof b.input?.command === 'string') {
+            const words = b.input.command.trim().split(/\s+/).slice(0, 2).join(' ');
+            if (words) count(b.id, `Bash:${words}`);
+          }
         }
       }
       if (e.type === 'result') {
+        if (e.modelUsage && typeof e.modelUsage === 'object' && !Array.isArray(e.modelUsage)) {
+          for (const [model, usage] of Object.entries(e.modelUsage)) observe(model, 0, usage?.costUSD);
+        }
         if (Number.isFinite(e.total_cost_usd)) cost = (cost ?? 0) + e.total_cost_usd;
         if (e.is_error || (e.subtype && e.subtype !== 'success')) error = `Claude result: ${e.subtype ?? 'error'}`;
         final = e.structured_output ?? e.result;
       }
     }
   }
-  return { toolCalls, modelReported, final, error, cost };
+  const modelsObserved = Object.fromEntries(models);
+  const extraModels = Object.keys(modelsObserved).some(model => model !== modelReported);
+  return { toolCalls, modelReported, modelsObserved, extraModels, final, error, cost };
 }
 export async function runReviewer(opts) {
   const { caseId, caseRepo, expectedShas: { base, head }, runtime, model, effort, sample, promptFile, outDir,
@@ -95,6 +122,7 @@ export async function runReviewer(opts) {
     ...(promptMetadata && {
       promptBuilder: promptMetadata.promptBuilder, verifierClause: promptMetadata.verifierClause,
       promptSourcePin: promptMetadata.promptSourcePin, omitRequest: promptMetadata.omitRequest,
+      ...(promptMetadata.droppedField === 'on' && { droppedField: 'on' }),
     }),
     instructionManifest: manifest, instructionFilesChanged: changedInstructionFiles(caseRepo), toolCalls: {},
     cost: null, durationMs: 0, exitCode: null, status: 'error', findings: null, error: null };
@@ -121,12 +149,15 @@ export async function runReviewer(opts) {
   try {
     const parsed = parseTranscript(stdout.toString('utf8'), runtime);
     record.cost = parsed.cost; record.toolCalls = parsed.toolCalls; record.modelReported = parsed.modelReported;
+    record.modelsObserved = parsed.modelsObserved; record.extraModels = parsed.extraModels;
     if (timedOut) throw new Error(`Timeout after ${timeoutMs}ms`);
     if (launchError) throw new Error(launchError);
     if (record.exitCode !== 0) throw new Error(`Reviewer exit code ${record.exitCode}`);
     if (parsed.error) throw new Error(parsed.error);
     if (parsed.final === undefined) throw new Error('Missing final message');
-    record.findings = validateFindings(typeof parsed.final === 'string' ? JSON.parse(parsed.final) : parsed.final);
+    const review = typeof parsed.final === 'string' ? JSON.parse(parsed.final) : parsed.final;
+    record.findings = validateFindings(review, record.droppedField);
+    if (record.droppedField === 'on') record.dropped = review.dropped;
     record.status = 'ok';
   } catch (e) { record.error = timedOut ? `Timeout after ${timeoutMs}ms` : e.message; record.status = timedOut ? 'cancelled' : 'error'; }
   Object.assign(record, JSON.parse(redact(JSON.stringify(record), secrets)));

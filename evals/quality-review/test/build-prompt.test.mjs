@@ -96,6 +96,17 @@ test('two real cases match pinned rendering, with no defect prose', pinnedOnly, 
   }
 });
 
+test('dropped arm changes only the output contract and adds one paragraph', pinnedOnly, t => {
+  const entry = cases.find(item => item.id === 'review-178');
+  const { keep, options } = assertPinnedRendering(t, entry, referencePrompt(pinnedPrompts()));
+  assert.equal(buildPrompt(entry, { ...options, droppedField: 'off' }), keep);
+  const paragraph = 'Also return `dropped`: every candidate problem you investigated and ruled out, each with `why_dropped` and `evidence`. `evidence` is the `path:line` locations that show it cannot happen; write an empty string if you have no code proof. Return an empty list if you ruled nothing out.';
+  const on = buildPrompt(entry, { ...options, droppedField: 'on' });
+  assert.equal(on, keep.slice(0, -OUTPUT_CONTRACT.length) +
+    OUTPUT_CONTRACT.replace('findings.schema.json', 'findings-dropped.schema.json') + '\n\n' + paragraph);
+  assert.equal(on.split(paragraph).length, 2);
+});
+
 test('all exported cases match pinned rendering', {
   skip: pinnedOnly.skip || (process.env.QR_EVAL_FULL !== '1' && 'Set QR_EVAL_FULL=1 to compare every exported case'),
 }, async t => {
@@ -152,6 +163,14 @@ test('trial builder writes the omitted-request prompt in dry-run and honors call
   const prompt = readFileSync(join(out, 'review-134.prompt.txt'), 'utf8');
   assert.match(prompt, /# Original request\n> \n\n# Specification/);
   assert.ok(!prompt.includes(quoteRequest(cases.find(c => c.id === 'review-134').input.prompt)));
+  const off = run('--dry-run', '--dropped-field', 'off');
+  assert.equal(off.status, 0, off.stderr);
+  assert.equal(readFileSync(join(out, 'review-134.prompt.txt'), 'utf8'), prompt);
+  const on = run('--dry-run', '--dropped-field', 'on');
+  assert.equal(on.status, 0, on.stderr);
+  const onPlan = JSON.parse(on.stdout.split('\n').find(line => line.startsWith('{')));
+  assert.equal(onPlan.droppedField, 'on');
+  assert.ok(onPlan.argv.some(arg => arg.endsWith('/findings-dropped.schema.json')));
 
   const fakeBinDir = scratch(t);
   writeFileSync(join(fakeBinDir, 'codex'), `#!${process.execPath}
@@ -179,6 +198,8 @@ console.error(hash.digest('hex'));
     assert.equal(record.verifierClause, 'drop');
     assert.equal(record.promptSourcePin, 'e42003a');
     assert.equal(record.omitRequest, true);
+    assert.equal(Object.hasOwn(record, 'droppedField'), false);
+    assert.equal(Object.hasOwn(record, 'dropped'), false);
     assert.equal(record.promptSha256, hash);
     const prefix = join(out, `review-134.codex.s${record.sample}`);
     assert.deepEqual(JSON.parse(readFileSync(prefix + '.json', 'utf8')), record);
